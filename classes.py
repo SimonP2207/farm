@@ -18,7 +18,7 @@ from pygdsm import GlobalSkyModel2016
 
 from farm import LOGGER, DATA_FILES
 import errorhandling as errh
-from cli.miriad import miriad
+from software.miriad import miriad
 
 # LOGGER = logging.getLogger('farm')
 

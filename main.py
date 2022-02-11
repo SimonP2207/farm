@@ -12,8 +12,8 @@ import astropy.units as u
 import loader
 import classes
 import astronomy as ast
-from cli.oskar import set_oskar_sim_beam_pattern, run_oskar_sim_beam_pattern
-from cli.miriad import miriad
+from software.oskar import set_oskar_sim_beam_pattern, run_oskar_sim_beam_pattern
+from software.miriad import miriad
 from farm import LOGGER
 
 # ############################################################################ #
