@@ -1,0 +1,5 @@
+*/__pycache__
+*.pyc
+/.idea/
+/tests/
+/.DS_Store
