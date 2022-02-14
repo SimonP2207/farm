@@ -2,7 +2,6 @@ import pathlib
 import logging
 
 __version__ = (0, 0, 1)
-
 __all__ = ['LOGGER', 'DATA_FILES']
 
 # Define directories within the farm package

@@ -12,8 +12,10 @@ import astropy.units as u
 import loader
 import classes
 import astronomy as ast
-from software.oskar import set_oskar_sim_beam_pattern, run_oskar_sim_beam_pattern
-from software.miriad import miriad
+from software.oskar import set_oskar_sim_beam_pattern
+from software.oskar import run_oskar_sim_beam_pattern
+import farm.errorhandling as errh
+import farm.imagefunctions as imfunc
 from farm import LOGGER
 
 # ############################################################################ #
@@ -24,13 +26,14 @@ cfg = loader.load_configuration("config.toml")
 sm_dir = pathlib.Path(cfg["directories"]["sky_models"])
 tel_dir = pathlib.Path(cfg["directories"]["telescope_model"])
 output_dir = pathlib.Path(cfg["directories"]["output"])
-gsmfile = pathlib.Path(cfg["sky_models"]["GDSM"]["image"])
+gdsmfile = pathlib.Path(cfg["sky_models"]["GDSM"]["image"])
+gssmfile = pathlib.Path(cfg["sky_models"]["GSSM"]["image"])
 
-freq_min = cfg["observation"]["correlator"]["freq_min"]  # in Hz
-freq_max = cfg["observation"]["correlator"]["freq_max"]  # in Hz
-nchan = cfg["observation"]["correlator"]["nchan"]  # in Hz
-chan_inc = cfg["observation"]["correlator"]["chanwidth"]  # channel BW for smearing calculation in Hz
-fov_deg = cfg["observation"]["field"]["fov"]  # in degrees for diffuse sky model
+freq_min = cfg["observation"]["correlator"]["freq_min"]  # [Hz]
+freq_max = cfg["observation"]["correlator"]["freq_max"]  # [Hz]
+nchan = cfg["observation"]["correlator"]["nchan"]  # [Hz]
+chan_inc = cfg["observation"]["correlator"]["chanwidth"]  # channel BW [Hz]
+fov_deg = cfg["observation"]["field"]["fov"]  # diffuse sky model FOV [deg]
 coord0 = SkyCoord(cfg["observation"]["field"]["ra0"],
                   cfg["observation"]["field"]["dec0"],
                   unit=(u.hourangle, u.degree),
@@ -40,7 +43,7 @@ ny = cfg["sky_models"]["GDSM"]["ny"]  # pixels in diffuse sky model
 ra0 = cfg["observation"]["field"]["ra0"]
 dec0 = cfg["observation"]["field"]["dec0"]
 frame = cfg["observation"]["field"]["frame"]
-flux_val = cfg["sky_models"]["PS"]["flux_cutoff"]  # flux cutoff beyond radius of fov_deg, Jy
+flux_val = cfg["sky_models"]["PS"]["flux_cutoff"]  # flux cutoff beyond radius of fov_deg [Jy]
 length_sec = cfg["observation"]["duration"]  # total length of observation
 cut_sec = cfg["observation"]["t_scan"]  # length of each cut ('scan')
 int_sec = cfg["observation"]["correlator"]["t_int"]  # integration time
@@ -68,7 +71,7 @@ cmpt = output_dir.joinpath(f'{out_root}_CMPT')
 # Define OSKAR specific names
 sbeam_ini = output_dir.joinpath(f'{out_root}.ini')
 sbeam_name = output_dir.joinpath(f'{out_root}_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I')
-sbeam_fname = output_dir.joinpath(f'{out_root}_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I.fits')
+sbeam_fname = sbeam_name.parent / (f'{sbeam_name.name}.fits')
 # ############################################################################ #
 # ######################## SET UP THE LOGGER ################################# #
 # ############################################################################ #
@@ -111,7 +114,7 @@ with open(sbeam_ini, 'wt') as f:
     set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size", nx)
     set_oskar_sim_beam_pattern(f, "beam_pattern/root_path", out_root)
     set_oskar_sim_beam_pattern(f, "beam_pattern/station_outputs/fits_image/auto_power", True)
-run_oskar_sim_beam_pattern(sbeam_ini)
+#run_oskar_sim_beam_pattern(sbeam_ini)
 # ############################################################################ #
 # ####################### Large-scale foreground model ####################### #
 # ############################################################################ #
@@ -121,27 +124,35 @@ if cfg["sky_models"]["GDSM"]["include"]:
                                        coord0=coord0, model='GSM2016')
         gdsm.add_frequency(freqs)
     else:
-        raise ValueError("Loading GDSM from image not currently supported")
-        if not gsmfile.exists():
+        errh.raise_error(ValueError,
+                         "Loading GDSM from image not currently supported")
+        if not gdsmfile.exists():
             raise FileNotFoundError("Check path for GDSM image")
-        gdsm = classes.DiffuseSkyModel.load_from_fits(gsmfile)
+        gdsm = classes.DiffuseSkyModel.load_from_fits(gdsmfile)
 else:
     gdsm = None
 
-gdsm.generate_fits(gsmf, unit='JY/PIXEL')
-gdsm.generate_miriad_image(gsm, unit='JY/PIXEL')
+# gdsm.generate_fits(gsmf, unit='JY/PIXEL')
+# gdsm.generate_miriad_image(gsm, unit='JY/PIXEL')
 # ############################################################################ #
 # ##################### Small-scale foreground model ######################### #
 # ############################################################################ #
-gssm_fits = cfg["sky_models"]["GSSM"]["image"]
-hdu_gssm = fits.open(gssm_fits)[0]
-hdr_gssm, imdata_gssm = hdu_gssm.header, hdu_gssm.data
-freqs_gssm = np.linspace(hdr_gssm['CRVAL3'] -
-                         ((hdr_gssm['CRPIX3'] - 1) * hdr_gssm['CDELT3']),
-                         hdr_gssm['CRVAL3'] +
-                         ((hdr_gssm['NAXIS3'] - hdr_gssm['CRPIX3'])
-                          * hdr_gssm['CDELT3']),
-                         hdr_gssm['NAXIS3'])
+if cfg["sky_models"]["GSSM"]["include"]:
+    if cfg["sky_models"]["GSSM"]["create"]:
+        errh.raise_error(ValueError,
+                         "Currently can only load GSSM model from image")
+    else:
+        if not gssmfile.exists():
+            errh.raise_error(FileNotFoundError, "Check path for GSSM image")
+        gssm = classes.DiffuseSkyModel.load_from_fits(gssmfile)
+else:
+    gssm = None
+
+hdu_gssm = gssm.hdr3d
+hdr_gssm, imdata_gssm = gssm.hdr3d, gssm.data
+
+# Rotate GSSM
+gssm.data = imfunc.rotate_image(gssm.data, phi=phi)
 # ############################################################################ #
 # ############################################################################ #
 # ############################################################################ #

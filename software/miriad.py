@@ -8,69 +8,30 @@ import re
 import subprocess
 import sys
 import warnings
-from farm.errorhandling import log_errors_warnings
+import errorhandling as errh
+import farm.software.common as sfuncs
 
 __all__ = ["mir_commands", "MiriadError", "miriad"]
+
+if sfuncs.which('miriad') is None:
+    errh.raise_error(ImportError, "miriad is not in your PATH")
 
 
 def mir_commands():
     """Get a filter list of miriad commands in the miriad bin directory"""
-    mir = which('miriad')
+    mir = sfuncs.which('miriad')
     if mir is None:
         raise OSError('miriad is not available. Check your PATH.')
     mirpath = os.path.split(mir)[0]
-    return [cmd for cmd in os.listdir(mirpath) \
-            if not (cmd.startswith('mir') or cmd.startswith('doc')
-                    or cmd.startswith('pgxwin')
-                    or cmd.startswith('pgdisp')
-                    or cmd.endswith('.exe'))]
+    return [cmd for cmd in os.listdir(mirpath)
+            if not (cmd.startswith('mir') or
+                    cmd.startswith('doc') or
+                    cmd.startswith('pgxwin') or
+                    cmd.startswith('pgdisp') or
+                    cmd.endswith('.exe'))]
 
 
-def which(program='miriad'):
-    """Equivalent of unix 'which' command"""
-
-    def is_exe(fpath_):
-        return os.path.exists(fpath_) and os.access(fpath_, os.X_OK)
-
-    if program:
-        fpath, fname = os.path.split(program)
-    else:
-        return None
-    if fpath and is_exe(program):
-        return program
-    else:
-        if "PATH" in os.environ:
-            for path in os.environ["PATH"].split(os.pathsep):
-                path = os.path.expandvars(os.path.expanduser(path))
-                exe_file = os.path.join(path, program)
-                if is_exe(exe_file):
-                    return exe_file
-
-    return None
-
-
-def match_in(key):
-    """Is the key  the 'in' keyword"""
-    rx = re.compile("^_?([iI][nN])_?$")
-    match = rx.match(key)
-    if match:
-        return True
-    return False
-
-
-def to_args(kw):
-    """Turn a key dictionary into a list of k=v command-line arguments."""
-    out = []
-    for k, v in kw.items():
-        if match_in(k):
-            k = "in"
-        if isinstance(v, list) or isinstance(v, tuple):
-            v = ",".join([str(i) for i in v])
-        out.append("%s=%s" % (k, v))
-    return out
-
-
-@log_errors_warnings
+@errh.log_errors_warnings
 def mir_func(f, thefilter):
     """Wrapper around miriad system calls"""
 
@@ -118,6 +79,27 @@ def mir_func(f, thefilter):
         return out
 
     return func
+
+
+def to_args(kw):
+    """Turn a key dictionary into a list of k=v command-line arguments."""
+    out = []
+    for k, v in kw.items():
+        if match_in(k):
+            k = "in"
+        if isinstance(v, list) or isinstance(v, tuple):
+            v = ",".join([str(i) for i in v])
+        out.append("%s=%s" % (k, v))
+    return out
+
+
+def match_in(key):
+    """Is the key  the 'in' keyword"""
+    rx = re.compile("^_?([iI][nN])_?$")
+    match = rx.match(key)
+    if match:
+        return True
+    return False
 
 
 class MiriadError(Exception):
@@ -205,5 +187,5 @@ miriad = Miriad()
 # __all__ += mir_commands()
 
 if __name__ == '__main__':
-    print(which('miriad'))
+    print(sfuncs.which('miriad'))
     a = miriad.fits(_in='test.fits', op='xyin', out='test.mirim')

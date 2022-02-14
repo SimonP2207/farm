@@ -3,6 +3,9 @@ from farm import LOGGER
 
 
 def log_errors_warnings(function):
+    """
+    Decorator for logging and raising errors/warnings issued during method calls
+    """
     def wrapper(*args, **kwargs):
         try:
             with warnings.catch_warnings(record=True) as w:
@@ -16,6 +19,7 @@ def log_errors_warnings(function):
 
 
 def raise_error(error_type, error_message: str, log: bool = True):
+    """Logs and raises an error"""
     if not issubclass(error_type, Exception):
         err_msg = "'error_type' must be an Wrror/Exception, not a " \
                   f"{type(error_type)}. Attempted error message was " \
@@ -29,6 +33,7 @@ def raise_error(error_type, error_message: str, log: bool = True):
 
 
 def issue_warning(warning_type, warning_message: str, log: bool = True):
+    """Logs and issues an error"""
     if not issubclass(warning_type, Warning):
         err_msg = "'warning_type' must be a Warning type, not a " \
                   f"{type(warning_type)}. Attempted warning message was " \

@@ -20,7 +20,44 @@ from farm import LOGGER, DATA_FILES
 import errorhandling as errh
 from software.miriad import miriad
 
-# LOGGER = logging.getLogger('farm')
+
+def _gaussian_beam_area(bmaj: float, bmin: float) -> float:
+    """
+    Area of a Gaussian beam [sr]
+
+    Parameters
+    ----------
+    bmaj
+        Beam major axis FWHM [deg]
+    bmin
+        Beam minor axis FWHM [deg]
+
+    Returns
+    -------
+    Total area under 2D Gaussian
+    """
+    bmaj_rad = np.radians(bmaj)
+    bmin_rad = np.radians(bmin)
+
+    return np.pi * bmaj_rad * bmin_rad / (4. * np.log(2.))
+
+
+def _guess_fits_bunit(header: Header, image_data: np.ndarray) -> str:
+    """
+    Guess the data unit for a .fits image e.g. when the BUNIT header keyword is
+    missing from the .fits header
+    """
+    # If average value is above T_CMB, assume it must be brightness temperature
+    if np.nanmean(image_data) > 2.:
+        return 'K'
+
+    # Otherwise, it must be a flux or intensity
+    # Assume if there is beam information, then it is Jy/beam
+    if 'BMAJ' in header:
+        return 'JY/BEAM'
+
+    # Otherwise assume Jy/pixel
+    return 'JY/PIXEL'
 
 
 def _generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
@@ -60,7 +97,7 @@ class SkyModel(ABC):
     distributions of flux on the celestial sphere)
     """
     _FREQ_TOL = 1.  # Tolerance (Hz) determining if two frequencies are the same
-    _VALID_UNITS = ('K', 'JY/PIXEL')
+    _VALID_UNITS = ('K', 'JY/PIXEL', 'JY/BEAM')
 
     @staticmethod
     def load_from_fits(fitsfile: pathlib.Path) -> 'LoadedSkyModel':
@@ -108,19 +145,25 @@ class SkyModel(ABC):
                           unit=(u.degree, u.degree), frame=frame)
 
         # Unit information
-        unit = hdr["BUNIT"].strip().upper()
-        if unit not in SkyModel._VALID_UNITS:
-            errh.raise_error(ValueError, f"Unrecognised units, {unit} in "
-                                         f"{fitsfile.__str__()}")
+        if 'BUNIT' in hdr:
+            unit = hdr["BUNIT"].strip().upper()
+            if unit not in SkyModel._VALID_UNITS:
+                errh.raise_error(ValueError, f"Unrecognised units, {unit} in "
+                                             f"{fitsfile.__str__()}")
+        else:
+            unit = _guess_fits_bunit(hdr, data)
 
-        if unit == 'JY/PIXEL':
-            wavelengths = con.c / freqs
-            pix_sr = (cdelt / 180. * con.pi) ** 2.
-            jansky_per_pixel_to_kelvin = wavelengths ** 2. * 1e-26 /\
-                                         (2. * con.Boltzmann * pix_sr)
-            data *= jansky_per_pixel_to_kelvin[:, np.newaxis, np.newaxis]
-        elif unit == 'K':
+        if unit == 'K':
             pass
+        elif unit in ('JY/PIXEL', 'JY/BEAM'):
+            if unit == 'JY/PIXEL':
+                solid_angle = (cdelt / 180. * con.pi) ** 2.
+            elif unit == 'JY/BEAM':
+                solid_angle = _gaussian_beam_area(hdr["BMAJ"], hdr["BMIN"])
+            wavelengths = con.c / freqs
+            conversion_to_k = wavelengths ** 2. * 1e-26 / \
+                              (2. * con.Boltzmann * solid_angle)
+            data *= conversion_to_k[:, np.newaxis, np.newaxis]
         else:
             errh.raise_error(ValueError,
                              f"Something has gone horribly wrong. "
@@ -130,6 +173,28 @@ class SkyModel(ABC):
                                    tb_data=data)
         sky_model.frequencies = list(freqs)
         _ = sky_model.hdr3d  # Generate header by calling hdr3d attribute
+
+        # Add any missing .fits Header keywords that were missed during
+        # instantiation of the LoadedSkyModel instance
+        for keyword in hdr:
+            if keyword not in sky_model.hdr3d:
+                if keyword == 'HISTORY':
+                    for line in str(hdr[keyword]).split('\n'):
+                        if line:
+                            sky_model.hdr3d.add_history(line)
+                elif keyword == 'COMMENT':
+                    for line in str(hdr[keyword]).split('\n'):
+                        if line:
+                            sky_model.hdr3d.add_comment(line)
+                else:
+                    try:
+                        sky_model.hdr3d.set(keyword, hdr[keyword])
+                    except ValueError:
+                        errh.issue_warning(UserWarning,
+                                           f"{keyword} not a recognised .fits "
+                                           "header keyword and will not be "
+                                           "added to the LoadedSkyModel "
+                                           "instance's header")
 
         return sky_model
 
@@ -427,7 +492,15 @@ class LoadedSkyModel(SkyModel):
             numpy.ndarray containing temperature brightness data
         """
         super().__init__(npix, cdelt, coord0)
-        self._data = tb_data
+        self.data = tb_data
+
+    @property
+    def data(self):
+        return self._data
+
+    @data.setter
+    def data(self, new_data):
+        self._data = new_data
 
     def t_b(self, freq: float) -> np.ndarray:
         freq_present = self.frequency_present(freq)
