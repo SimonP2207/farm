@@ -4,3 +4,6 @@
 /tests/
 /.DS_Store
 sky_cuts.py
+*.def
+/*.fits
+data/gsm2016_components.h5
