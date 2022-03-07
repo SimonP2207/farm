@@ -21,7 +21,7 @@ def log_errors_warnings(function):
 def raise_error(error_type, error_message: str, log: bool = True):
     """Logs and raises an error"""
     if not issubclass(error_type, Exception):
-        err_msg = "'error_type' must be an Wrror/Exception, not a " \
+        err_msg = "'error_type' must be an Error/Exception, not a " \
                   f"{type(error_type)}. Attempted error message was " \
                   f"{error_message}"
         if log:

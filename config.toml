@@ -1,56 +1,66 @@
 root_name = "OTST11"  # root name for all output files (not directory)
 
 [directories]
-base = "/Users/simon.purser/pylib/farm/testrun"
-sky_models = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels"
-telescope_models = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels"
-telescope_model = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/V512/telescope.tm"
-output = "/Users/simon.purser/Desktop/test_output_farm"
+  base = "/Users/simon.purser/pylib/farm/testrun"
+  sky_models = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels"
+  telescope_models = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels"
+  telescope_model = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/V512/telescope.tm"
+  output = "/Users/simon.purser/Desktop/test_output_farm"
 
+# observation not yet incorporated in to FARM
 [observation]
-  time = 2027-01-01T12:00:01
-  duration = 14400  # s
-  n_scan = 5  # Number of observational 'scans' of target field
-  t_scan = 60  # Duration of each 'scan' of target field, s
-  [observation.field]
-  ra0 = "00:00:00.0"  # HH:MM:SS.S
-  dec0 = "-30:00:00.00"  # DD:MM:SS.SS
-  frame = "fk5"  # Astropy-compatible frame string
-  nxpix = 1024
-  nypix = 1024
-  fov = 8.0  # deg
-  cdelt = 30.0  # arcsec
+    time = 2027-01-01T12:00:01
+    duration = 14400  # s
+    n_scan = 5  # Number of observational 'scans' of target field
+    t_scan = 60  # Duration of each 'scan' of target field, s
+    [observation.field]
+    ra0 = "00:00:00.0"  # HH:MM:SS.S
+    dec0 = "-30:00:00.00"  # DD:MM:SS.SS
+    frame = "fk5"  # Astropy-compatible frame string
+    nxpix = 1024
+    nypix = 1024
+    fov = 8.0  # deg
+    cdelt = 30.0  # arcsec
 
   [observation.correlator]
-  freq_min = 116e6  # Hz
-  freq_max = 136e6  # Hz
-  nchan = 3  # Number of evenly spaced channels across whole bandwidth, int
-  chanwidth = 1e4  # channel bandwidth for smearing calculation, Hz
-  t_int = 10.0  # visibility integration time, s
+    freq_min = 116e6  # Hz
+    freq_max = 136e6  # Hz
+    nchan = 3  # Number of evenly spaced channels across whole bandwidth, int
+    chanwidth = 1e4  # channel bandwidth for smearing calculation, Hz
+    t_int = 10.0  # visibility integration time, s
+
+# calibration not yet incorporated in to FARM
+[calibration]
+  [calibration.TEC]
+    include = false
+  [calibration.gains]
+    include = false
+  [calibration.DD-effects]
+    include = false
 
 [sky_models]
   [sky_models.21cm]
-  include = false
-  create = true
-  image = ""
+    include = false
+    create = true
+    image = ""
 
   [sky_models.A-Team]
-  include = false
+    include = false
 
   [sky_models.GDSM]
-  include = true
-  create = true
-  nx = 1024  # x-pixels in diffuse sky model
-  ny = 1024  # y-pixels in diffuse sky model
-  image = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels/GDSM/gsm_2016_cube.fits"
+    include = true
+    create = true
+    nx = 1024  # x-pixels in diffuse sky model
+    ny = 1024  # y-pixels in diffuse sky model
+    image = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels/GDSM/gsm_2016_cube.fits"
 
   [sky_models.GSSM]
-  include = true
-  create = false
-  image = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels/GSSM/Gsynch_SKAs.fits"
+    include = true
+    create = false
+    image = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels/GSSM/Gsynch_SKAs.fits"
 
   [sky_models.PS]
-  include = false
-  create = false
-  flux_cutoff = 10000.0  # flux cutoff beyond radius of fov_deg, Jy
-  image = ""
+    include = false
+    create = false
+    flux_cutoff = 10000.0  # flux cutoff beyond radius of fov_deg, Jy
+    image = ""

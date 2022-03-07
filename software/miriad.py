@@ -39,6 +39,34 @@ def mir_func(f, thefilter):
         if len(args) == 1:
             kw["_in"] = args[0]
         args = to_args(kw)
+
+        # SJDP added: 14/02/2022, for no-limit character-length input parameters
+        # In case any of the args have values > 80 characters long. However,
+        # this doesn't work even though the miriad user guide says using @file
+        # containing long parameter values is ok.
+        # TODO: Contact Mark Wieringa or someone at ATNF to ask why @file
+        #  containing filenames > 80 characters doesn't work
+        # created_param_files = []
+        # for idx, arg in enumerate(args):
+        #     k, v = arg.split("=")
+        #     if len(v) >= 0:
+        #         param_file = pathlib.Path(f"{k}_param")
+        #         if param_file.exists():
+        #             param_file.unlink()
+        #         with open(param_file, 'wt') as p:
+        #             p.write(v)
+        #         args[idx] = f"{k}=@{param_file}"
+        #         created_param_files.append(param_file)
+        #
+        # temp_def_file = pathlib.Path(f"{f}.def")
+        # if temp_def_file.exists():
+        #     temp_def_file.unlink()
+        #
+        # with open(temp_def_file, 'wt') as def_file:
+        #     def_file.write('\n'.join(args))
+        #
+        # proc = subprocess.Popen([f, '-f', temp_def_file], shell=False,
+        #                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()

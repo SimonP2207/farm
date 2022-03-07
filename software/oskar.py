@@ -65,4 +65,4 @@ def run_oskar_sim_beam_pattern(ini_file: Union[pathlib.Path, str]):
         errh.raise_error(FileNotFoundError, f"{ini_file.name} does not exist")
 
     cmd = f"{sfuncs.which('oskar_sim_beam_pattern')} {{}}"
-    subprocess.run(cmd.format(ini_file.__str__()), shell='True')
+    subprocess.run(cmd.format(str(ini_file.resolve())), shell='True')

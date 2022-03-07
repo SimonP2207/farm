@@ -79,21 +79,21 @@ def rotate_image(image_data: np.ndarray, phi: float,
 
     a, b = np.tan(phip / 2.), -np.sin(phip)
     # do FFT-shear-based rotation following Larkin et al. 1997 (only for
-    # rotations of -45 to +45 degree)
+    # rotations of -45 deg <= phi <= +45 deg)
     for iplan in range(0, zlen, 1):
         for icol in range(0, xlen, 1):
-            gx[iplan, icol, :] = np.real(np.fft.ifft(
-                np.fft.fft(impad[iplan, icol, :]) * np.exp(
-                    -2.j * np.pi * (icol - xlen / 2) * ufreq * a)))
+            gx[iplan, icol, :] = np.real(np.fft.ifft(np.fft.fft(
+                impad[iplan, icol, :]) *
+                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * a)))
 
         for icol in range(0, xlen, 1):
-            gyx[iplan, :, icol] = np.real(np.fft.ifft(
-                np.fft.fft(gx[iplan, :, icol]) * np.exp(
-                    -2.j * np.pi * (icol - xlen / 2) * ufreq * b)))
+            gyx[iplan, :, icol] = np.real(np.fft.ifft(np.fft.fft(
+                gx[iplan, :, icol]) *
+                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * b)))
 
         for icol in range(0, xlen, 1):
-            gxyx[iplan, icol, :] = np.real(np.fft.ifft(
-                np.fft.fft(gyx[iplan, icol, :]) * np.exp(
-                    -2.j * np.pi * (icol - xlen / 2) * ufreq * a)))
+            gxyx[iplan, icol, :] = np.real(np.fft.ifft(np.fft.fft(
+                gyx[iplan, icol, :]) *
+                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * a)))
 
     return crop_frac(gxyx, 0.5, 0.5)

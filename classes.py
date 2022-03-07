@@ -1,66 +1,93 @@
 """
 All classes for use within the FARM infrastructure.
 """
+import copy
 import shutil
 import pathlib
+import tempfile
 import math
 import random
 from abc import ABC, abstractmethod
-from typing import Tuple, Sequence, Union
+from typing import Tuple, Union, TypeVar
+
+import numpy.typing as npt
 import numpy as np
 import scipy.constants as con
+import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.io.fits import Header
-import astropy.units as u
 from reproject import reproject_from_healpix
 from pygdsm import GlobalSkyModel2016
 
 from farm import LOGGER, DATA_FILES
+from farm import decorators
 import errorhandling as errh
+import astronomy as ast
 from software.miriad import miriad
 
 
-def _gaussian_beam_area(bmaj: float, bmin: float) -> float:
+SkyModelType = TypeVar('SkyModelType', bound='_BaseSkyClass')
+
+
+def fits_bunit(fitsfile: pathlib.Path) -> str:
     """
-    Area of a Gaussian beam [sr]
-
-    Parameters
-    ----------
-    bmaj
-        Beam major axis FWHM [deg]
-    bmin
-        Beam minor axis FWHM [deg]
-
-    Returns
-    -------
-    Total area under 2D Gaussian
+    Get brightness unit from .fits header. If 'BUNIT' not present in .fits
+    header, best guess the data unit
     """
-    bmaj_rad = np.radians(bmaj)
-    bmin_rad = np.radians(bmin)
+    header, image_data = fits_hdr_and_data(fitsfile)
 
-    return np.pi * bmaj_rad * bmin_rad / (4. * np.log(2.))
+    if 'BUNIT' in header:
+        return header["BUNIT"].strip().upper()
+    else:
+        # If average value is above T_CMB, assume it must be T_B
+        if np.nanmean(image_data) > 2.:
+            return 'K'
 
+        # Otherwise, it must be a flux or intensity
+        # Assume if there is beam information, then it is Jy/beam
+        if 'BMAJ' in header:
+            return 'JY/BEAM'
 
-def _guess_fits_bunit(header: Header, image_data: np.ndarray) -> str:
-    """
-    Guess the data unit for a .fits image e.g. when the BUNIT header keyword is
-    missing from the .fits header
-    """
-    # If average value is above T_CMB, assume it must be brightness temperature
-    if np.nanmean(image_data) > 2.:
-        return 'K'
-
-    # Otherwise, it must be a flux or intensity
-    # Assume if there is beam information, then it is Jy/beam
-    if 'BMAJ' in header:
-        return 'JY/BEAM'
-
-    # Otherwise assume Jy/pixel
-    return 'JY/PIXEL'
+        # Otherwise assume Jy/pixel
+        return 'JY/PIXEL'
 
 
-def _generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
+def fits_equinox(fitsfile: pathlib.Path) -> float:
+    """Get equinox from .fits header. Assume J2000 if absent"""
+    header, _ = fits_hdr_and_data(fitsfile)
+
+    try:
+        return header["EQUINOX"]
+    except KeyError:
+        # Assume J2000 if information not present in header
+        errh.issue_warning(UserWarning,
+                           "Equinox information not present. Assuming J2000")
+        return 2000.0
+
+
+def fits_hdr_and_data(fitsfile: pathlib.Path) -> Tuple[Header, np.ndarray]:
+    """Return header and data from a .fits image/cube"""
+    hdulist = fits.open(fitsfile)[0]
+    return hdulist.header, hdulist.data
+
+
+def fits_frequencies(fitsfile: pathlib.Path) -> np.ndarray:
+    """Get list of frequencies of a .fits cube, as np.ndarray"""
+    header, _ = fits_hdr_and_data(fitsfile)
+    return fits_hdr_frequencies(header)
+
+
+def fits_hdr_frequencies(header: Header) -> np.ndarray:
+    """Get list of frequencies from a .fits header, as np.ndarray"""
+    freq_min = (header["CRVAL3"] - (header["CRPIX3"] - 1) *
+                header["CDELT3"])
+    freq_max = (header["CRVAL3"] + (header["NAXIS3"] - header["CRPIX3"]) *
+                header["CDELT3"])
+    return np.linspace(freq_min, freq_max, header["NAXIS3"])
+
+
+def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
     """
     For generating sequence of random characters for e.g. file naming
 
@@ -75,6 +102,11 @@ def _generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
     -------
     string of defined length comprised of random characters from desired
     character range
+
+    Raises
+    ------
+    ValueError
+        If 'choices' not one of 'alphanumeric', 'alpha' or 'numeric'
     """
     if choices not in ('alphanumeric', 'alpha', 'numeric'):
         raise ValueError("choices must be one of 'alphanumeric', 'alpha', or "
@@ -84,367 +116,255 @@ def _generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
         poss_chars += ''.join([chr(_) for _ in range(65, 91)])
         poss_chars += ''.join([chr(_) for _ in range(97, 123)])
     if 'numeric' in choices:
-        poss_chars += ''.join([chr(_) for _ in range(49,58)])
+        poss_chars += ''.join([chr(_) for _ in range(49, 58)])
 
     assert poss_chars, "Not sure how poss_chars is an empty string..."
 
     return ''.join([random.choice(poss_chars) for _ in range(length)])
 
 
-class SkyModel(ABC):
-    """
-    Abstract superclass for all subclasses represnting sky models (i.e.
-    distributions of flux on the celestial sphere)
-    """
-    _FREQ_TOL = 1.  # Tolerance (Hz) determining if two frequencies are the same
-    _VALID_UNITS = ('K', 'JY/PIXEL', 'JY/BEAM')
+def hdr2d_from_skymodel(sky_class: SkyModelType) -> Header:
+    hdr_dict = {
+        'BITPIX': -32,
+        'NAXIS': 2,
+        'NAXIS1': sky_class.n_x,
+        'NAXIS2': sky_class.n_y,
+        'CTYPE1': 'RA---SIN',
+        'CTYPE2': 'DEC--SIN',
+        'CRVAL1': sky_class.coord0.ra.deg,
+        'CRVAL2': sky_class.coord0.dec.deg,
+        'CRPIX1': sky_class.n_x / 2,
+        'CRPIX2': sky_class.n_y / 2,
+        'CDELT1': -sky_class.cdelt,
+        'CDELT2': sky_class.cdelt,
+        'CUNIT1': 'deg     ',
+        'CUNIT2': 'deg     ',
+        'EQUINOX': {'fk4': 1950., 'fk5': 2000.}[sky_class.coord0.frame.name],
+    }
 
-    @staticmethod
-    def load_from_fits(fitsfile: pathlib.Path) -> 'LoadedSkyModel':
+    # Guarantee order in which keywords are added to .fits header
+    order = ('BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2',
+             'CTYPE1', 'CTYPE2', 'CRVAL1', 'CRVAL2',
+             'CRPIX1', 'CRPIX2', 'CDELT1', 'CDELT2',
+             'CUNIT1', 'CUNIT2', 'EQUINOX')
+
+    hdr = Header({'Simple': True})
+    for keyword, value in ((kw, hdr_dict[kw]) for kw in order):
+        hdr.set(keyword, value)
+
+    return hdr
+
+
+def hdr3d_from_skyclass(sky_class: SkyModelType) -> Header:
+    if len(sky_class.frequencies) == 0:
+        raise ValueError("Can't create Header from SkyClass with no frequency "
+                         "information")
+
+    hdr_dict = {
+        'NAXIS3': len(sky_class.frequencies),
+        'CTYPE3': 'FREQ    ',
+        'CRVAL3': min(sky_class.frequencies),
+        'CRPIX3': 1,
+        'CDELT3': sky_class.frequencies[1] - sky_class.frequencies[0]
+        if len(sky_class.frequencies) > 1 else 1,
+        'CUNIT3': 'Hz      ',
+    }
+
+    hdr = hdr2d_from_skymodel(sky_class)
+    hdr.insert('NAXIS2', ('NAXIS3', None), after=True)
+    hdr.insert('CTYPE2', ('CTYPE3', 'FREQ    '), after=True)
+    hdr.insert('CRVAL2', ('CRVAL3', None), after=True)
+    hdr.insert('CRPIX2', ('CRPIX3', 1), after=True)
+    hdr.insert('CDELT2', ('CDELT3', None), after=True)
+    hdr.insert('CUNIT2', ('CUNIT3', 'Hz      '), after=True)
+
+    order = ('NAXIS3', 'CTYPE3', 'CRVAL3', 'CRPIX3', 'CDELT3', 'CUNIT3')
+
+    for keyword, value in ((kw, hdr_dict[kw]) for kw in order):
+        hdr.set(keyword, value)
+
+    return hdr
+
+
+class _BaseSkyClass(ABC):
+    """
+    Abstract superclass for all subclasses representing sky models (i.e.
+    distributions of temperature brightness/intensity/flux on the celestial
+    sphere)
+
+    Class Attributes
+    ----------------
+    FREQ_TOL : float
+        Tolerance (in Hz) determining if two frequencies are the same. See
+        frequency_present method
+    VALID_UNITS : tuple of str
+        Units that are valid outputs of t_b/i_nu/flux_nu methods and valid
+        inputs from .fits files
+
+    Attributes
+    ----------
+    n_x : int
+        Number of pixels in the x (right ascension) direction
+    n_y : int
+        Number of pixels in the x (right ascension) direction
+    cdelt: float
+        Pixel size [deg]
+    coord0: astropy.coordinates.SkyCoord
+        Field-of-view's central coordinate
+    """
+    FREQ_TOL = 1.
+    VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR')
+
+    @classmethod
+    def load_from_fits(cls, fitsfile: pathlib.Path) -> 'SkyComponent':
         """
-        Creates a LoadedSkyModel instance from a .fits cube
+        Creates a SkyComponent instance from a .fits cube
 
         Parameters
         ----------
         fitsfile
             Full path to .fits file
+
         Returns
         -------
-        LoadedSkyModel instance
+        SkyComponent instance
+
+        Raises
+        ------
+        FileNotFoundError
+            If fitsfile doesn't exist
+
+        ValueError
+            If the units found in the .fits header are not one of the class
+            variable VALID_UNITS or are not understood
         """
-        LOGGER.info(f"Loading {fitsfile.__str__()} as LoadedSkyModel instance")
+        LOGGER.info(f"Loading {str(fitsfile.resolve())}")
         if not fitsfile.exists():
             errh.raise_error(FileNotFoundError,
-                             f"{fitsfile.__str__()} not found")
+                             f"{str(fitsfile.resolve())} not found")
 
-        hdulist = fits.open(fitsfile)[0]
-        hdr, data = hdulist.header, hdulist.data
+        hdr, data = fits_hdr_and_data(fitsfile)
+
+        if data.ndim != 3:
+            errh.raise_error(ValueError, ".fits must be a cube (3D), but has "
+                                         f"{data.ndim} dimensions")
 
         # Image information
-        nx, ny = hdr["NAXIS1"], hdr["NAXIS2"]
-        cdelt = hdr["CDELT2"]
+        nx_, ny_, cdelt_ = hdr["NAXIS1"], hdr["NAXIS2"], hdr["CDELT2"]
+        ra_cr, dec_cr = hdr["CRVAL1"], hdr["CRVAL2"]
+        freqs = fits_frequencies(fitsfile)  # Spectral axis information
+        unit = fits_bunit(fitsfile)  # Brightness unit information
+        equinox = fits_equinox(fitsfile)  # 1950.0 or 2000.0
 
-        # Spectral axis information
-        freq_min = hdr["CRVAL3"] - (hdr["CRPIX3"] - 1) * hdr["CDELT3"]
-        freq_max = hdr["CRVAL3"] + (hdr["NAXIS3"] -
-                                    hdr["CRPIX3"]) * hdr["CDELT3"]
-        freqs = np.linspace(freq_min, freq_max, hdr["NAXIS3"])
+        frame = {1950.0: 'fk4', 2000.0: 'fk5'}[equinox]
+        coord0 = SkyCoord(ra_cr, dec_cr, unit=(u.degree, u.degree),
+                          frame=frame)
 
-        # Coordinate information
-        try:
-            equinox = hdr["EQUINOX"]
-        except KeyError:
-            # Assume J2000 if information not present in header
-            errh.issue_warning(UserWarning,
-                               "Equinox information not present in "
-                               f"{fitsfile.__str__()}, assuming J2000")
-            equinox = 2000.0
-
-        frame = {2.00E3: 'fk5', 1.95E3: 'fk4'}[equinox]
-        coord0 = SkyCoord(hdr["CRVAL1"], hdr["CRVAL2"],
-                          unit=(u.degree, u.degree), frame=frame)
-
-        # Unit information
-        if 'BUNIT' in hdr:
-            unit = hdr["BUNIT"].strip().upper()
-            if unit not in SkyModel._VALID_UNITS:
-                errh.raise_error(ValueError, f"Unrecognised units, {unit} in "
-                                             f"{fitsfile.__str__()}")
-        else:
-            unit = _guess_fits_bunit(hdr, data)
-
-        if unit == 'K':
-            pass
-        elif unit in ('JY/PIXEL', 'JY/BEAM'):
-            if unit == 'JY/PIXEL':
-                solid_angle = (cdelt / 180. * con.pi) ** 2.
-            elif unit == 'JY/BEAM':
-                solid_angle = _gaussian_beam_area(hdr["BMAJ"], hdr["BMIN"])
-            wavelengths = con.c / freqs
-            conversion_to_k = wavelengths ** 2. * 1e-26 / \
-                              (2. * con.Boltzmann * solid_angle)
-            data *= conversion_to_k[:, np.newaxis, np.newaxis]
-        else:
+        if unit not in cls.VALID_UNITS:
             errh.raise_error(ValueError,
-                             f"Something has gone horribly wrong. "
-                             f"Unit in loaded .fits is '{unit}'")
+                             f"Something has gone unexpectedly wrong. "
+                             f"Unit in loaded .fits image is '{unit}'")
+        else:
+            if unit == 'K':
+                pass
+            elif unit == 'JY/SR':
+                data = ast.intensity_to_tb(data, freqs)
+            elif unit == 'JY/PIXEL':
+                data = ast.flux_to_tb(data, freqs, np.radians(cdelt_) ** 2.)
 
-        sky_model = LoadedSkyModel((nx, ny), cdelt=cdelt, coord0=coord0,
-                                   tb_data=data)
-        sky_model.frequencies = list(freqs)
-        _ = sky_model.hdr3d  # Generate header by calling hdr3d attribute
-
-        # Add any missing .fits Header keywords that were missed during
-        # instantiation of the LoadedSkyModel instance
-        for keyword in hdr:
-            if keyword not in sky_model.hdr3d:
-                if keyword == 'HISTORY':
-                    for line in str(hdr[keyword]).split('\n'):
-                        if line:
-                            sky_model.hdr3d.add_history(line)
-                elif keyword == 'COMMENT':
-                    for line in str(hdr[keyword]).split('\n'):
-                        if line:
-                            sky_model.hdr3d.add_comment(line)
-                else:
-                    try:
-                        sky_model.hdr3d.set(keyword, hdr[keyword])
-                    except ValueError:
-                        errh.issue_warning(UserWarning,
-                                           f"{keyword} not a recognised .fits "
-                                           "header keyword and will not be "
-                                           "added to the LoadedSkyModel "
-                                           "instance's header")
+        sky_model = SkyComponent((nx_, ny_), cdelt=cdelt_, coord0=coord0)
+        sky_model._frequencies = freqs
+        sky_model._tb_data = data
 
         return sky_model
 
-    def __init__(self, npix: Tuple[int, int], cdelt: float,
-                 coord0: SkyCoord):
-        """
-        Parameters
-        ----------
-        npix
-            Number if pixels in (x, y) of the SkyModel
-        cdelt
-            Pixel size [deg]
-        coord0
-            Central coordinate of SkyModel
-        """
-        self.n_x, self.n_y = npix
+    def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord):
+        # Attributes created from constructor args
+        self.n_x, self.n_y = n_pix
         self.cdelt = cdelt
         self.coord0 = coord0
-        self._freqs = []
-        self._hdr2d = None
-        self._hdr3d = None
+
+        # Private instance attributes
+        self._frequencies = np.array([])
+        self._tb_data = np.empty((len(self._frequencies), self.n_y, self.n_x))
+
+        # Call __post_init__ equivalent to dataclass' __post_init__
+        self.__post_init__()
+
+    def __post_init__(self):
+        pass
+
+    def data(self, unit: str) -> npt.ArrayLike:
+        if unit not in self.VALID_UNITS:
+            errh.raise_error(ValueError,
+                             f"Something has gone unexpectedly wrong. "
+                             f"Unit in loaded .fits image is '{unit}'")
+        elif unit == 'K':
+            data_ = self._tb_data
+        elif unit == 'JY/PIXEL':
+            data_ = ast.tb_to_flux(self._tb_data, self.frequencies,
+                                   np.radians(self.cdelt) ** 2.)
+        elif unit == 'JY/SR':
+            data_ = ast.tb_to_intensity(self._tb_data, self.frequencies)
+        else:
+            raise ValueError(f"{unit} not valid as unit")
+
+        return data_
 
     @property
-    def frequencies(self):
-        """Sky model observing frequencies"""
-        return self._freqs
+    def frequencies(self) -> npt.ArrayLike:
+        return self._frequencies
 
-    @frequencies.setter
-    def frequencies(self, new_frequencies):
-        self._freqs = new_frequencies
-
-    def add_frequency(self, new_freq: Union[float, np.ndarray, Sequence[float]]):
+    def add_frequency(self, new_freq: Union[float, npt.ArrayLike]):
         """
-        Add an observing frequency (or frequencies) to the SkyModel
+        Add an observing frequency (or frequencies)
 
         Parameters
         ----------
         new_freq
             Observing frequency to add. Can be a float or iterable of floats
+
         Returns
         -------
         None
+
+        Raises
+        ------
+        TypeError
+            If one of frequencies/the frequency being added is not a float
         """
         if isinstance(new_freq, (list, tuple, np.ndarray)):
             for freq in new_freq:
                 self.add_frequency(freq)
         elif isinstance(new_freq, (float, np.floating)):
-            dupl_freq = self.frequency_present(new_freq)
-            if not dupl_freq:
-                self.frequencies.append(new_freq)
-                self.frequencies.sort()
-            else:
+            # Check frequency not already present
+            if np.isclose(self._frequencies, new_freq).any():
                 wrng_msg = f"Supplied frequency, {new_freq:.3f}Hz, already " \
-                           f"present in SkyModel ({dupl_freq:.3f}Hz)"
+                           f"present"
                 errh.issue_warning(UserWarning, wrng_msg)
+            else:
+                self._frequencies = np.append(self._frequencies, new_freq)
+                self._frequencies.sort()
+                idx = np.asarray(self._frequencies == new_freq).nonzero()[0][0]
+                self._tb_data = np.insert(self._tb_data, idx,
+                                          self.t_b(new_freq), axis=0)
         else:
-            err_msg = f"Can't add a {type(new_freq)} to SkyModel frequencies," \
+            err_msg = f"Can't add a {type(new_freq)} to frequencies," \
                       f" must be a float or list-like object containing floats"
             errh.raise_error(TypeError, err_msg)
 
     @property
-    def hdr2d(self) -> Header:
-        """
-        FITS Header object for a 2D SkyModel image (i.e. no spectral axis)
-
-        Returns
-        -------
-        astropy.io.fits.header.Header instance
-        """
-        if self._hdr2d is None:
-            hdr2d = Header({'Simple': True})
-            hdr2d.set('BITPIX', -32)
-            hdr2d.set('NAXIS', 2)
-            hdr2d.set('NAXIS1', self.n_x)
-            hdr2d.set('NAXIS2', self.n_y)
-            hdr2d.set('CTYPE1', 'RA---SIN')
-            hdr2d.set('CTYPE2', 'DEC--SIN')
-            hdr2d.set('CRVAL1', self.coord0.ra.deg)
-            hdr2d.set('CRVAL2', self.coord0.dec.deg)
-            hdr2d.set('CRPIX1', self.n_x / 2)
-            hdr2d.set('CRPIX2', self.n_y / 2)
-            hdr2d.set('CDELT1', -self.cdelt)
-            hdr2d.set('CDELT2', self.cdelt)
-            hdr2d.set('CUNIT1', 'deg     ')
-            hdr2d.set('CUNIT2', 'deg     ')
-            hdr2d.set('EQUINOX', {'fk5': 2000.,
-                                  'fk4': 1950.}[self.coord0.frame.name])
-            self._hdr2d = hdr2d
-
-        return self._hdr2d
-
-    @hdr2d.setter
-    def hdr2d(self, new_hdr2d: Header):
-        if not isinstance(new_hdr2d, Header):
-            err_msg = f"Trying to assign as {type(new_hdr2d)} as .fits header"
-            errh.raise_error(TypeError, err_msg)
-        self._hdr2d = new_hdr2d
+    def header(self):
+        return hdr3d_from_skyclass(self)
 
     @property
-    def hdr3d(self) -> Union[Header, None]:
-        """Get astropy.io.fits.Header instance for SkyModel"""
-        if len(self.frequencies) == 0:
-            wrng_msg = "Cannot assign header to SkyModel, add frequencies"
-            errh.issue_warning(UserWarning, wrng_msg)
-            return None
-
-        if self._hdr3d is None:
-            hdr3d = self.hdr2d.copy()
-            hdr3d.set('NAXIS', 3)
-            hdr3d.insert('CTYPE2', ('CTYPE3', 'FREQ    '), after=True)
-            hdr3d.insert('CRPIX2', ('CRPIX3', 1), after=True)
-            hdr3d.insert('CUNIT2', ('CUNIT3', 'Hz      '), after=True)
-            hdr3d.insert('NAXIS2', ('NAXIS3', None), after=True)
-            hdr3d.insert('CRVAL2', ('CRVAL3', None), after=True)
-            hdr3d.insert('CDELT2', ('CDELT3', None), after=True)
-            self._hdr3d = hdr3d
-
-        self._hdr3d.set('NAXIS3', len(self.frequencies))
-        self._hdr3d.set('CRVAL3', min(self.frequencies))
-        # TODO: Probably should leave it to the user to set channel width
-        if len(self.frequencies) > 1:
-            self._hdr3d.set('CDELT3', self.frequencies[1] - self.frequencies[0])
-        else:
-            self._hdr3d.set('CDELT3', 1.)
-            # TODO: rbraun set beam parameters...
-            # hdr3d.header.set('BMAJ', bmaj)
-            # hdr3d.header.set('BMIN', bmin)
-            # hdr3d.header.set('BPA', bpa)
-
-        return self._hdr3d
-
-    @hdr3d.setter
-    def hdr3d(self, new_hdr3d: Header):
-        """Set SkyModel astropy.io.fits.Header or one of its values"""
-        if not isinstance(new_hdr3d, Header):
-            err_msg = f"Can't assign {type(new_hdr3d)} instance as .fits header"
-            errh.raise_error(TypeError, err_msg)
-
-        if self._hdr3d is None:
-            err_msg = ".fits header hasn't been created and therefore can't " \
-                      "be modified"
-            errh.raise_error(TypeError, err_msg)
-
-        self._hdr3d = new_hdr3d
-
-    def frequency_present(self, freq: float,
-                          abs_tol: float = _FREQ_TOL) -> Union[float, bool]:
-        """
-        Check if frequency already present in SkyModel
-
-        Parameters
-        ----------
-        freq
-            Frequency to check [Hz]
-        abs_tol
-            Absolute tolerance to determine two matching frequencies [Hz]
-        Returns
-        -------
-        None
-        """
-        for freq_1 in self.frequencies:
-            if math.isclose(freq, freq_1, abs_tol=abs_tol):
-                return freq_1
-
-        return False
-
-    def generate_fits(self, fitsfile: pathlib.Path, unit: str = 'JY/PIXEL'):
-        """
-        Write .fits file cube of intensities or brightness temperatures
-
-        Parameters
-        ----------
-        fitsfile
-            Full path to write .fits file to
-        unit
-            One of either 'JY/PIXEL' (default) or 'K' for intensity or
-            brightness temperature, respectively
-        Returns
-        -------
-        None
-        """
-        LOGGER.info(f"Generating .fits file, {str(fitsfile)}")
-
-        if unit not in self._VALID_UNITS:
-            err_msg = f"{unit} not a valid unit. Choose one of " \
-                      f"{', '.join(self._VALID_UNITS[:-1])} or " \
-                      f"{self._VALID_UNITS[-1]}"
-            errh.raise_error(ValueError, err_msg)
-
-        gsmcube = np.empty((len(self.frequencies), self.n_y, self.n_x),
-                           dtype=np.float32)
-        for ichan, frequency in enumerate(self.frequencies):
-            if unit == 'JY/PIXEL':
-                gsmcube[ichan, :, :] = self.i_nu(frequency)
-            elif unit == 'K':
-                gsmcube[ichan, :, :] = self.t_b(frequency)
-
-        gsmhdu = fits.PrimaryHDU(gsmcube)
-
-        self.hdr3d.set('BUNIT', format(unit, '8'))
-
-        gsmhdu.header = self.hdr3d
-
-        if fitsfile.exists():
-            wrng_msg = f"{fitsfile} already exists. Overwriting"
-            errh.issue_warning(UserWarning, wrng_msg)
-
-        gsmhdu.writeto(fitsfile, overwrite=True)
-
-    def generate_miriad_image(self, miriad_image: pathlib.Path,
-                              unit: str = 'JY/PIXEL'):
-        """
-        Write .fits file cube of intensities or brightness temperatures
-
-        Parameters
-        ----------
-        miriad_image
-            Full path to write miriad image to
-        unit
-            One of either 'JY/PIXEL' (default) or 'K' for intensity or
-            brightness temperature, respectively
-        Returns
-        -------
-        None
-        """
-        temp_dir = miriad_image.resolve().parent
-        temp_pfx = temp_dir.joinpath(str(miriad_image.name).replace('.', '_'))
-        temp_fits_file = pathlib.Path(f"{temp_pfx}_"
-                                      f"temp_{_generate_random_chars(10)}.fits")
-
-        if temp_fits_file.exists():
-            raise FileExistsError("I don't know how this is possible. You "
-                                  "literally had a 1 in 800 quadrillion chance "
-                                  "of randomly generating the same name as a "
-                                  "file that already exists")
-
-        self.generate_fits(temp_fits_file, unit=unit)
-
-        if miriad_image.exists():
-            errh.issue_warning(UserWarning,
-                               f"{str(miriad_image)} already exists, removing")
-            shutil.rmtree(miriad_image)
-
-        miriad.fits(_in=temp_fits_file, out=miriad_image, op='xyin')
-        temp_fits_file.unlink()
+    def header2d(self):
+        return hdr2d_from_skymodel(self)
 
     @abstractmethod
-    def t_b(self, freq: float) -> np.ndarray:
+    def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
         """
-        Calculate SkyModel brightness temperature [K]
+        Calculate brightness temperature distribution [K]
 
         Parameters
         ----------
@@ -456,73 +376,296 @@ class SkyModel(ABC):
         np.ndarray of brightness temperatures with shape (self.n_x, self.n_y)
         """
 
-    @abstractmethod
-    def i_nu(self, freq: float) -> np.ndarray:
+    def i_nu(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
         """
-        Calculate SkyModel intensity image [Jy / pixel]
+        Calculate intensity sky distribution [Jy/sr]
 
         Parameters
         ----------
         freq
-           Frequency at which intensities are wanted [Hz]
+           Frequency at which brightness temperatures are wanted [Hz]
 
         Returns
         -------
         np.ndarray of intensities with shape (self.n_x, self.n_y)
         """
+        return ast.tb_to_intensity(self.t_b(freq), freq)
 
-
-class LoadedSkyModel(SkyModel):
-    """Sky model loaded from a .fits file"""
-    def __init__(self, npix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
-                 tb_data: np.ndarray):
+    def flux_nu(self, freq: Union[float, npt.ArrayLike]):
         """
-        Extends the behaviour of superclass constructor method by requiring a
-        model for the Galactic diffuse emission
+        Calculate fluxes sky distribution [Jy/pixel]
 
         Parameters
         ----------
-        npix
-            Number if pixels in (x, y) of the SkyModel
-        cdelt
-            Pixel size [deg]
-        coord0
-            Central coordinate of SkyModel
-        tb_data
-            numpy.ndarray containing temperature brightness data
+        freq
+           Frequency at which fluxes are wanted [Hz]
+
+        Returns
+        -------
+        np.ndarray of fluxes with shape (self.n_x, self.n_y)
         """
-        super().__init__(npix, cdelt, coord0)
-        self.data = tb_data
+        solid_angle = np.radians(self.cdelt) ** 2.
+
+        return ast.intensity_to_flux(self.i_nu(freq), solid_angle)
+
+    @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
+    def write_fits(self, fits_file: pathlib.Path, unit: str):
+        """
+        Write .fits cube of intensities or brightness temperatures
+
+        Parameters
+        ----------
+        fits_file
+            Full path to write .fits file to
+        unit
+            One of {0}
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            When supplied unit is not one of {0}
+        """
+        LOGGER.info(f"Generating .fits file, {str(fits_file)}")
+
+        if unit not in self.VALID_UNITS:
+            err_msg = f"{unit} not a valid unit. Choose one of " \
+                      f"{str(self.VALID_UNITS)[1:-1]}"
+            errh.raise_error(ValueError, err_msg)
+
+        gsmhdu = fits.PrimaryHDU(self.data(unit=unit))
+        hdr = self.header
+        hdr.set('BUNIT', format(unit, '8'))
+        gsmhdu.header = hdr
+
+        if fits_file.exists():
+            wrng_msg = f"{fits_file} already exists. Overwriting"
+            errh.issue_warning(UserWarning, wrng_msg)
+
+        gsmhdu.writeto(fits_file, overwrite=True)
+
+    @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
+    def write_miriad_image(self, miriad_image: pathlib.Path, unit: str):
+        """
+        Write miriad image of intensities or brightness temperatures
+
+        Parameters
+        ----------
+        miriad_image
+            Full path to write miriad image to
+        unit
+            One of {0}
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        FileExistsError
+            In the unlikely event that the randomly generated name for a
+            created, temporary file already exists (very unlikely!)
+        """
+        temp_dir = pathlib.Path(tempfile.gettempdir())
+        temp_pfx = temp_dir.joinpath(str(miriad_image.name).replace('.', '_'))
+        temp_fits_file = pathlib.Path(f"{temp_pfx}_"
+                                      f"temp_{generate_random_chars(10)}.fits")
+
+        if temp_fits_file.exists():
+            raise FileExistsError("I don't know how this is possible. There "
+                                  "was literally had a 1 in 800 quadrillion "
+                                  "chance of randomly generating the same "
+                                  "name as a file that already exists")
+
+        self.write_fits(temp_fits_file, unit=unit)
+
+        if miriad_image.exists():
+            errh.issue_warning(UserWarning,
+                               f"{str(miriad_image)} already exists, removing")
+            shutil.rmtree(miriad_image)
+
+        miriad.fits(_in=temp_fits_file, out=miriad_image, op='xyin')
+        temp_fits_file.unlink()
+
+    def regrid(self, template: SkyModelType) -> SkyModelType:
+        """
+        Regrid the SkyClass onto the coordinate grid of another SkyClass. Make
+        sure that the SkyClass to be regridded is in the field of view of the
+        template SkyClass, or a flat field of zero intensity will be found. Uses
+        miriad's regrid task to perform the regridding.
+
+        Parameters
+        ----------
+        template
+            SkyClass instance which to grid ONTO
+
+        Returns
+        -------
+        New sky model regridded onto template grid
+        """
+        # TODO: Implement check here that self is in field of view of template
+
+        # Define temporary images
+        sffx = generate_random_chars(10)
+        template_mir_image = pathlib.Path(f'temp_template_image_{sffx}.im')
+        input_mir_image = pathlib.Path(f'temp_input_image_{sffx}.im')
+        out_mir_image = pathlib.Path(f'temp_out_image_{sffx}.im')
+        out_fits_image = pathlib.Path(f'out_image_{sffx}.fits')
+
+        temporary_images = (template_mir_image, input_mir_image,
+                            out_mir_image, out_fits_image)
+
+        for temporary_image in temporary_images:
+            if temporary_image.exists():
+                shutil.rmtree(temporary_image)
+
+        template.write_miriad_image(template_mir_image, unit='K')
+        self.write_miriad_image(input_mir_image, unit='K')
+
+        miriad.regrid(_in=input_mir_image, tin=template_mir_image,
+                      out=out_mir_image)
+        miriad.fits(op='xyout', _in=out_mir_image, out=out_fits_image)
+
+        regridded_input_temp = self.load_from_fits(out_fits_image)
+
+        for temporary_image in temporary_images:
+            if temporary_image.is_dir():
+                shutil.rmtree(temporary_image)
+            else:
+                temporary_image.unlink()
+
+        regridded_input_skyclass = copy.deepcopy(self)
+        regridded_input_skyclass.n_x = regridded_input_temp.n_x
+        regridded_input_skyclass.n_y = regridded_input_temp.n_y
+        regridded_input_skyclass.cdelt = regridded_input_temp.cdelt
+        regridded_input_skyclass._tb_data = regridded_input_temp._tb_data
+
+        return regridded_input_skyclass
+
+    def frequency_present(self, freq: float,
+                          abs_tol: float = FREQ_TOL) -> Union[float, bool]:
+        """
+        Check if frequency already present in SkyModel
+
+        Parameters
+        ----------
+        freq
+            Frequency to check [Hz]
+        abs_tol
+            Absolute tolerance to determine two matching frequencies [Hz]
+        Returns
+        -------
+        False if no matching frequency found, or the matching frequency itself
+        """
+        for freq_1 in self.frequencies:
+            if math.isclose(freq, freq_1, abs_tol=abs_tol):
+                return freq_1
+
+        return False
+
+    def possess_similar_header(self, other: SkyModelType) -> bool:
+        """
+        Ensure matching image sizes, frequencies and cell sizes. Acceptable
+        difference in cell sizes is the difference between the two pixel
+        sizes for which a misalignment of the pixel grids across the whole
+        image of less than half a pixel would be seen
+
+        Parameters
+        ----------
+        other
+            Other SkyClass instance to check compatibility with
+
+        Returns
+        -------
+        True if similar header information, False otherwise
+        """
+        if self.n_x != other.n_x:
+            return False
+        if self.n_y != other.n_y:
+            return False
+        if not all([other.frequency_present(f) for f in self.frequencies]):
+            return False
+
+        rel_pix_tol = 0.5 / max([self.n_x, self.n_y])
+        if not math.isclose(self.cdelt, other.cdelt, rel_tol=rel_pix_tol):
+            return False
+
+        if not math.isclose(self.coord0.ra.deg, other.coord0.ra.deg,
+                            rel_tol=rel_pix_tol):
+            return False
+
+        if not math.isclose(self.coord0.dec.deg, other.coord0.dec.deg,
+                            rel_tol=rel_pix_tol):
+            return False
+
+        return True
+
+
+class SkyComponent(_BaseSkyClass):
+    def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
+                 model: Union[None, str] = None):
+        super().__init__(n_pix, cdelt, coord0)
+        self._model = model
 
     @property
-    def data(self):
-        return self._data
+    def model(self):
+        return self._model
 
-    @data.setter
-    def data(self, new_data):
-        self._data = new_data
+    def normalise(self, other: SkyModelType):
+        pass
 
-    def t_b(self, freq: float) -> np.ndarray:
-        freq_present = self.frequency_present(freq)
-        if not freq_present:
+    def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
+        raise NotImplementedError
+
+
+class SkyModel(_BaseSkyClass):
+    def __post_init__(self):
+        super().__post_init__()
+        self._components = []
+
+    def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
+        data_ = np.zeros((self.n_y, self.n_x))
+        for component_ in self.components:
+            data_ += component_.i_nu(freq)
+
+        return ast.intensity_to_tb(data_, freq)
+
+    @property
+    def components(self):
+        return self._components
+
+    def add_component(self, new_component: SkyComponent):
+        if not isinstance(new_component, SkyComponent):
+            raise TypeError("Only SkyComponent instances can be added to "
+                            f"SkyModel, not a {type(new_component)} instance")
+
+        if not self.possess_similar_header(new_component):
             errh.raise_error(ValueError,
-                             f"{freq}Hz not present in model frequencies")
-        idx = self.frequencies.index(freq_present)
+                             f"{new_component} incompatible with sky model")
 
-        return self._data[idx]
-
-    def i_nu(self, freq: float) -> np.ndarray:
-        wavelength = con.c / freq
-        pix_sr = (self.cdelt / 180. * con.pi) ** 2.
-        kelvin_to_jansky_per_pixel = 2. * con.Boltzmann * pix_sr / \
-                                     (wavelength ** 2.) / 1e-26
-
-        return self.t_b(freq) * kelvin_to_jansky_per_pixel
+        self._components.append(new_component)
 
 
-class DiffuseSkyModel(SkyModel):
-    """Diffuse sky model for Galactic emission"""
+class GDSM(SkyComponent):
+    """
+    Diffuse, large-scale sky model for Galactic emission
+
+    Class Attributes
+    ----------
+    VALID_MODELS : tuple of str
+        Models valid to instantiate a DiffuseSkyModel instance with
+
+    Attributes
+    ----------
+    model : str
+        Model used to instantiate the instance and calculate the brightness
+        temperature distribution
+    """
     VALID_MODELS = ('GSM2016',)  # Valid Galactic sky models
+
     def __init__(self, npix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
                  model: str = 'GSM2016'):
         """
@@ -538,49 +681,65 @@ class DiffuseSkyModel(SkyModel):
         coord0
             Central coordinate of SkyModel
         model
-            One of 'GSM2016' (default),
+            Model with which to calculate brightness temperature distribution.
+            See class variable 'VALID_MODELS' for accepted values. Default is
+            'GSM2016'
+
+        Raises
+        ------
+        ValueError
+            When 'model' value is not in DiffuseSkyModel.VALID_MODELS
         """
-        if model not in DiffuseSkyModel.VALID_MODELS:
+        if model not in self.VALID_MODELS:
             errh.raise_error(ValueError,
                              f"{model} not a valid diffuse model")
 
-        super().__init__(npix, cdelt, coord0)
-        self.model = model
+        super().__init__(npix, cdelt, coord0, model)
 
     def t_b(self, freq: float) -> np.ndarray:
         if self.model == 'GSM2016':
-            gdsm = GlobalSkyModel2016(freq_unit='Hz', data_unit='TCMB',
+            gdsm = GlobalSkyModel2016(freq_unit='Hz', data_unit='MJysr',
                                       resolution='hi')
         else:
-            gdsm = None
             errh.raise_error(ValueError,
                              f"{self.model} is not a recognised model for "
-                             f"DiffuseSkyModel class")
+                             f"DiffuseSkyModel class. This should have been "
+                             f"caught within the __init__ constructor method?")
 
-        temp_fitsfile = pathlib.Path('temp.fits')
+        temp_fitsfile = pathlib.Path(f'temp{generate_random_chars(10)}.fits')
 
         gdsm.generate(freq)
-        gdsm.write_fits(temp_fitsfile.__str__())  # expects str type
+        gdsm.write_fits(str(temp_fitsfile))  # expects str type
+
         hdugsm = fits.open(temp_fitsfile)
         hdugsm[1].header.set('COORDSYS', 'G')
 
         temp_fitsfile.unlink()
 
-        return np.single(reproject_from_healpix(hdugsm[1], self.hdr2d))[0]
+        i_nu = np.single(reproject_from_healpix(hdugsm[1], self.header2d))[0]
+        i_nu *= 1e6  # MJy/sr -> Jy/sr
 
-    def i_nu(self, freq: float) -> np.ndarray:
-        wavelength = con.c / freq
-        pix_sr = (self.cdelt / 180. * con.pi) ** 2.
-        kelvin_to_jansky_per_pixel = 2. * con.Boltzmann * pix_sr / \
-                                     (wavelength ** 2.) / 1e-26
-
-        return self.t_b(freq) * kelvin_to_jansky_per_pixel
+        return ast.intensity_to_tb(i_nu, freq)
 
 
-class SmallSkyModel(SkyModel):
-    """Small-scale sky model for Galactic emission"""
+class GSSM(SkyComponent):
+    """
+    Small-scale (e.g. filamentary) sky model for Galactic emission
+
+    Class Attributes
+    ----------
+    VALID_MODELS : tuple of str
+        Models valid to instantiate a SmallSkyModel instance with
+
+    Attributes
+    ----------
+    model : str
+        Model used to instantiate the instance and calculate the brightness
+        temperature distribution
+    """
     VALID_MODELS = ('MHD',)  # Valid Galactic sky models
 
+    @decorators.docstring_parameter(str(VALID_MODELS)[1:-1])
     def __init__(self, npix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
                  model: str = 'MHD'):
         """
@@ -590,57 +749,75 @@ class SmallSkyModel(SkyModel):
         Parameters
         ----------
         npix
-            Number if pixels in (x, y) of the SkyModel
+            Number of pixels in (x, y), or (ra, dec)
         cdelt
             Pixel size [deg]
         coord0
             Central coordinate of SkyModel
         model
-            One of 'MHD' (default),
+            Model with which to calculate brightness temperature distribution.
+            See class variable 'VALID_MODELS' for accepted values. Default is
+            'MHD', for which a new GSSM instance is instantiated
+
+        Raises
+        ------
+        ValueError
+            When 'model' arg is not one of {0}
         """
-        if model not in DiffuseSkyModel.VALID_MODELS:
+        if model not in self.VALID_MODELS:
             errh.raise_error(ValueError,
                              f"{model} not a valid short-scale model")
 
-        super().__init__(npix, cdelt, coord0)
-        self.model = model
+        if model == 'MHD':
+            sm = self.load_from_fits(DATA_FILES["MHD"])
+            if npix != (sm.n_x, sm.n_y):
+                errh.issue_warning(UserWarning,
+                                   "For MHD GSSM model, must adopt image size "
+                                   f"of {sm.n_x} x {sm.n_y}. Ignoring request "
+                                   f"for {npix[0]} x {npix[1]}")
 
-        if self.model == 'MHD':
-            hduim = fits.open(DATA_FILES[self.model])
-            model_hdr = hduim[0].header
-            freqs = np.linspace(
-                model_hdr['CRVAL3'] - ((model_hdr['CRPIX3'] - 1) *
-                                       model_hdr['CDELT3']),
-                model_hdr['CRVAL3'] + ((model_hdr['NAXIS3'] -
-                                        model_hdr['CRPIX3']) *
-                                       model_hdr['CDELT3']),
-                model_hdr['NAXIS3']
-            )
-            self.add_frequency(freqs)
+            super().__init__((sm.n_x, sm.n_y), cdelt, coord0,)
+            self._frequencies = sm.frequencies
+            self._tb_data = sm.data(unit='K')
+
+        self._model = model
 
     def t_b(self, freq: float) -> np.ndarray:
         if self.model == 'MHD':
-            hduim = fits.open(DATA_FILES[self.model])
-            imdat = np.squeeze(hduim[0].data)
-            imhdr = hduim[0].header
-
-    def i_nu(self, freq: float) -> np.ndarray:
-        wavelength = con.c / freq
-        pix_sr = (self.cdelt / 180. * con.pi) ** 2.
-        kelvin_to_jansky_per_pixel = 2. * con.Boltzmann * pix_sr / \
-                                     (wavelength ** 2.) / 1e-26
-
-        return self.t_b(freq) * kelvin_to_jansky_per_pixel
+            return self.data('K')[np.where(self.frequencies == freq)[0][0]]
 
 
 if __name__ == '__main__':
-    import logging
     import astropy.units as u
+    import matplotlib.pylab as plt
+    from pathlib import Path
+    from astronomy import power_spectrum
 
-    coord = SkyCoord(1.34, 0.4312, frame='fk5', unit=(u.rad, u.rad))
-    dsm = DiffuseSkyModel((102, 48), 1./12., coord)
-    dsm.add_frequency(np.linspace(3.9e9, 4.1e9, 3))
-    test_fitsfile = pathlib.Path("~/Desktop/test.fits")
+    gdsm_cdelt = 0.0621480569243431  # Apparent pixel size of GDSM model
+    nx, ny, cell_size = 512, 512, 8. / 512
+    ra, dec = "01:02:03.4", "05:06:07.89"
 
-    test_fitsfile = test_fitsfile.expanduser()
-    dsm.generate_fits(test_fitsfile)
+    dims = (nx, ny)
+    coord = SkyCoord(ra, dec, frame='fk5', unit=(u.hourangle, u.degree))
+
+    gssm = GSSM(dims, cell_size, coord, model='MHD')
+    gdsm = GDSM([round(np.ceil(8. / gdsm_cdelt))] * 2, gdsm_cdelt, coord)
+    gdsm.add_frequency(gssm.frequencies)
+    gdsm_regridded = gdsm.regrid(gssm)
+
+    skymodel = SkyModel(dims, cell_size, coord)
+
+    for component in (gssm, gdsm_regridded):
+        skymodel.add_component(component)
+
+    skymodel.add_frequency(gssm.frequencies)
+
+    gdsm_no_regrid_fits = Path("gdsm_not_regridded_Tb.fits")
+    gdsm_fits = Path("gdsm_regridded_Tb.fits")
+    gssm_fits = Path("gssm_Tb.fits")
+    skymodel_fits = Path("skymodel_Tb.fits")
+
+    gdsm.write_fits(gdsm_no_regrid_fits, unit='K')
+    gdsm_regridded.write_fits(gdsm_fits, unit='K')
+    gssm.write_fits(gssm_fits, unit='K')
+    skymodel.write_fits(skymodel_fits, unit='K')

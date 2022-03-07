@@ -1,3 +1,4 @@
+import shutil
 import sys
 import logging
 
@@ -12,6 +13,7 @@ import astropy.units as u
 import loader
 import classes
 import astronomy as ast
+from software.miriad import miriad
 from software.oskar import set_oskar_sim_beam_pattern
 from software.oskar import run_oskar_sim_beam_pattern
 import farm.errorhandling as errh
@@ -90,11 +92,46 @@ coord0 = SkyCoord(ra0, dec0, unit=(u.hourangle, u.degree), frame=frame)
 cdelt = fov_deg / nx
 freqs = np.linspace(freq_min, freq_max, nchan)
 freq_inc = freqs[1] - freqs[0]
+start_utc = ast.get_start_time(coord0.ra.deg, length_sec)
+# ############################################################################ #
+# ##################### Small-scale foreground model ######################### #
+# ############################################################################ #
+# if cfg["sky_models"]["GSSM"]["include"]:
+#     if cfg["sky_models"]["GSSM"]["create"]:
+#         errh.raise_error(ValueError,
+#                          "Currently can only load GSSM model from image")
+#     else:
+#         if not gssmfile.exists():
+#             errh.raise_error(FileNotFoundError, "Check path for GSSM image")
+#         gssm = classes.SmallSkyModel((512, 512), fov_deg / 512 * 1.05,
+#                                      coord0, 'MHD')
+# else:
+#     gssm = None
+#
+# # Rotate GSSM to align filamentary structure with Galactic B-field
+# rotation_angle = ast.angle_to_galactic_plane(coord0)
+# gssm.data = imfunc.rotate_image(gssm.data, phi=rotation_angle)
+# # ############################################################################ #
+# # ####################### Large-scale foreground model ####################### #
+# # ############################################################################ #
+# if cfg["sky_models"]["GDSM"]["include"]:
+#     if cfg["sky_models"]["GDSM"]["create"]:
+#         gdsm = classes.DiffuseSkyModel((nx, ny), cdelt=48. / 60.,
+#                                        coord0=coord0, model='GSM2016')
+#         gdsm.add_frequency(freqs)
+#     else:
+#         errh.raise_error(ValueError,
+#                          "Loading GDSM from image not currently supported")
+#         if not gdsmfile.exists():
+#             raise FileNotFoundError("Check path for GDSM image")
+#         gdsm = classes.DiffuseSkyModel.load_from_fits(gdsmfile)
+# else:
+#     gdsm = None
+#
+# gdsm_regrid = gdsm.regrid(template=gssm)
 # ############################################################################ #
 # ###################### Calculate station beams with OSKAR ################## #
 # ############################################################################ #
-phi = ast.angle_to_galactic_plane(coord0)
-start_utc = ast.get_start_time(coord0.ra.deg, length_sec)
 with open(sbeam_ini, 'wt') as f:
     set_oskar_sim_beam_pattern(f, "simulator/double_precision", False)
     set_oskar_sim_beam_pattern(f, "observation/phase_centre_ra_deg",
@@ -114,45 +151,7 @@ with open(sbeam_ini, 'wt') as f:
     set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size", nx)
     set_oskar_sim_beam_pattern(f, "beam_pattern/root_path", out_root)
     set_oskar_sim_beam_pattern(f, "beam_pattern/station_outputs/fits_image/auto_power", True)
-#run_oskar_sim_beam_pattern(sbeam_ini)
-# ############################################################################ #
-# ####################### Large-scale foreground model ####################### #
-# ############################################################################ #
-if cfg["sky_models"]["GDSM"]["include"]:
-    if cfg["sky_models"]["GDSM"]["create"]:
-        gdsm = classes.DiffuseSkyModel((nx, ny), cdelt=cdelt,
-                                       coord0=coord0, model='GSM2016')
-        gdsm.add_frequency(freqs)
-    else:
-        errh.raise_error(ValueError,
-                         "Loading GDSM from image not currently supported")
-        if not gdsmfile.exists():
-            raise FileNotFoundError("Check path for GDSM image")
-        gdsm = classes.DiffuseSkyModel.load_from_fits(gdsmfile)
-else:
-    gdsm = None
-
-# gdsm.generate_fits(gsmf, unit='JY/PIXEL')
-# gdsm.generate_miriad_image(gsm, unit='JY/PIXEL')
-# ############################################################################ #
-# ##################### Small-scale foreground model ######################### #
-# ############################################################################ #
-if cfg["sky_models"]["GSSM"]["include"]:
-    if cfg["sky_models"]["GSSM"]["create"]:
-        errh.raise_error(ValueError,
-                         "Currently can only load GSSM model from image")
-    else:
-        if not gssmfile.exists():
-            errh.raise_error(FileNotFoundError, "Check path for GSSM image")
-        gssm = classes.DiffuseSkyModel.load_from_fits(gssmfile)
-else:
-    gssm = None
-
-hdu_gssm = gssm.hdr3d
-hdr_gssm, imdata_gssm = gssm.hdr3d, gssm.data
-
-# Rotate GSSM
-gssm.data = imfunc.rotate_image(gssm.data, phi=phi)
+run_oskar_sim_beam_pattern(sbeam_ini)
 # ############################################################################ #
 # ############################################################################ #
 # ############################################################################ #

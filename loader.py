@@ -1,12 +1,10 @@
 import typing
-import logging
 import pathlib
 import datetime
 import toml
 
 from farm import LOGGER
 import errorhandling as errh
-
 
 
 def check_file_exists(filename: pathlib.Path):
