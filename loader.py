@@ -10,10 +10,10 @@ from farm import LOGGER
 import errorhandling as errh
 
 
-def check_file_exists(filename: pathlib.Path):
+def check_file_exists(filename: pathlib.Path) -> bool:
     if not filename.exists():
-        errh.raise_error(FileNotFoundError,
-                         f"{filename.resolve().__str__()} doesn't exist")
+        return False
+    return True
 
 
 def check_config_validity(config_dict: dict):
@@ -80,11 +80,13 @@ def load_configuration(toml_file: typing.Union[pathlib.Path, str]) -> dict:
     if not isinstance(toml_file, pathlib.Path):
         toml_file = pathlib.Path(toml_file)
 
-    check_file_exists(toml_file)
-    LOGGER.debug(f"{toml_file.resolve().__str__()} exists")
+    if not check_file_exists(toml_file):
+        errh.raise_error(FileNotFoundError,
+                         f"{str(toml_file.resolve())} doesn't exist")
 
+    LOGGER.debug(f"{str(toml_file.resolve())} found")
     config_dict = toml.load(toml_file)
     check_config_validity(config_dict)
-    LOGGER.debug(f"{toml_file.resolve().__str__()} configuration is valid")
+    LOGGER.debug(f"{str(toml_file.resolve())} configuration is valid")
 
     return config_dict
