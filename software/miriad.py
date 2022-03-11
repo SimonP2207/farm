@@ -1,7 +1,8 @@
 """
 Methods/classes related to the command-line interface with miriad. Code is
 copied from mirpy v0.3.1 by means of combining all contents of mirpy's
-wrapper.py and commands.py into this single module.
+wrapper.py and commands.py into this single module, apart from the 'which'
+method which is located in the farm.software.common module
 """
 import os
 import re

@@ -656,7 +656,28 @@ class SkyComponent(_BaseSkyClass):
         return self._model
 
     def normalise(self, other: SkyModelType):
-        pass
+        """
+        Adjust the SkyComponent instance's brightness in order to properly
+        recover the angular power spectrum of the combined power spectrum
+
+        Parameters
+        ----------
+        other
+            Other SkyComponent instance to normalise to. This should be the
+            SkyComponent defining the low end of the angular power spectrum
+
+        Returns
+        -------
+        None
+        """
+        self_data = self.data(unit='K')
+
+        self_sum_td_nu = np.nansum(self.data(unit='K'), axis=(1, 2))
+        other_sum_td_nu = np.nansum(other.data(unit='K'), axis=(1, 2))
+
+        self_data *= (other_sum_td_nu / self_sum_td_nu)[:, None, None]
+
+        self._tb_data = self_data
 
     def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
         raise NotImplementedError

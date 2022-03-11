@@ -19,21 +19,21 @@
 ### System
 - [casa](https://casa.nrao.edu/) (developed with v6.4.0.16)
 - [gsl](https://anaconda.org/conda-forge/gsl) (developed with v2.7)
-- [miriad](https://www.atnf.csiro.au/computing/software/miriad/)(developed with v20220120)
+- [miriad](https://www.atnf.csiro.au/computing/software/miriad/) (developed with v20220120)
 - [oskar](https://ska-telescope.gitlab.io/sim/oskar/python/quickstart.html) (developed with v2.8.2)
 
 ## Installation help
 
-Installation within a virtual environment is an easy method, for which instructions on installing those dependencies listed above is shown below.
+For the python modules detailed above (and their dependencies (e.g. `gsl`), installation within a virtual environment is a possible method. Instructions for virtual environment creation and installing those dependencies listed above is shown below (requires a conda insallation).
 
-Installation of `py21cmFAST` on MacOSX leads to issues during compilation with the error, `clang: error: unsupported option '-fopenmp'` being thrown when installing via `pip install `. To properly resolve this and install `py21cmFAST` is detailed [here](https://github.com/21cmfast/21cmFAST/issues/84).
+**NOTE**: Installation of `py21cmFAST` on MacOSX leads to issues during compilation with the error, `clang: error: unsupported option '-fopenmp'` being thrown when installing via `pip install `. To properly resolve this and install `py21cmFAST` is detailed [here](https://github.com/21cmfast/21cmFAST/issues/84).
 
 ```commandline
 conda create -n farm python=3
 conda activate farm
 
 # General package requirements
-conda install numpy scipy jupyter matplotlib astropy h5py gsl
+conda install astropy gsl h5py jupyter matplotlib numpy reproject scipy toml
 
 # py21cmFAST
 # OpenMP enabled libraries of fftw are available through conda-forge, using "conda install fftw" does not include openmp threads
