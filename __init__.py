@@ -10,4 +10,7 @@ _data_dcy = _pkg_loc.joinpath('data')
 
 # Set up the package-level logger
 LOGGER = logging.getLogger(__name__)
-DATA_FILES = {'MHD': _data_dcy.joinpath('Gsynch_SKAs.fits')}
+DATA_FILES = {'MHD': _data_dcy.joinpath('Gsynch_SKAs.fits'),
+              'ATEAM': _data_dcy.joinpath('ateam.data')}
+
+from .classes import GDSM, GSSM, SkyModel

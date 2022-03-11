@@ -12,7 +12,6 @@ from typing import Tuple, Union, TypeVar
 
 import numpy.typing as npt
 import numpy as np
-import scipy.constants as con
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -22,9 +21,9 @@ from pygdsm import GlobalSkyModel2016
 
 from farm import LOGGER, DATA_FILES
 from farm import decorators
-import errorhandling as errh
-import astronomy as ast
-from software.miriad import miriad
+from . import errorhandling as errh
+from . import astronomy as ast
+from .software import miriad
 
 
 SkyModelType = TypeVar('SkyModelType', bound='_BaseSkyClass')
@@ -40,17 +39,18 @@ def fits_bunit(fitsfile: pathlib.Path) -> str:
     if 'BUNIT' in header:
         return header["BUNIT"].strip().upper()
     else:
-        # If average value is above T_CMB, assume it must be T_B
-        if np.nanmean(image_data) > 2.:
-            return 'K'
-
-        # Otherwise, it must be a flux or intensity
-        # Assume if there is beam information, then it is Jy/beam
-        if 'BMAJ' in header:
-            return 'JY/BEAM'
-
-        # Otherwise assume Jy/pixel
-        return 'JY/PIXEL'
+        return None
+        # # If average value is above T_CMB, assume it must be T_B
+        # if np.nanmean(image_data) > 2.:
+        #     return 'K'
+        #
+        # # Otherwise, it must be a flux or intensity
+        # # Assume if there is beam information, then it is Jy/beam
+        # if 'BMAJ' in header:
+        #     return 'JY/BEAM'
+        #
+        # # Otherwise assume Jy/pixel
+        # return 'JY/PIXEL'
 
 
 def fits_equinox(fitsfile: pathlib.Path) -> float:
@@ -125,7 +125,7 @@ def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
 
 def hdr2d_from_skymodel(sky_class: SkyModelType) -> Header:
     hdr_dict = {
-        'BITPIX': -32,
+        'BITPIX': -32,  # Assuming all pixel values in range -3.4E38 to +3.4E38
         'NAXIS': 2,
         'NAXIS1': sky_class.n_x,
         'NAXIS2': sky_class.n_y,
@@ -194,7 +194,7 @@ class _BaseSkyClass(ABC):
 
     Class Attributes
     ----------------
-    FREQ_TOL : float
+    _FREQ_TOL : float
         Tolerance (in Hz) determining if two frequencies are the same. See
         frequency_present method
     VALID_UNITS : tuple of str
@@ -212,10 +212,11 @@ class _BaseSkyClass(ABC):
     coord0: astropy.coordinates.SkyCoord
         Field-of-view's central coordinate
     """
-    FREQ_TOL = 1.
+    _FREQ_TOL = 1.
     VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR')
 
     @classmethod
+    @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
     def load_from_fits(cls, fitsfile: pathlib.Path) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits cube
@@ -253,8 +254,17 @@ class _BaseSkyClass(ABC):
         nx_, ny_, cdelt_ = hdr["NAXIS1"], hdr["NAXIS2"], hdr["CDELT2"]
         ra_cr, dec_cr = hdr["CRVAL1"], hdr["CRVAL2"]
         freqs = fits_frequencies(fitsfile)  # Spectral axis information
-        unit = fits_bunit(fitsfile)  # Brightness unit information
         equinox = fits_equinox(fitsfile)  # 1950.0 or 2000.0
+        unit = fits_bunit(fitsfile)  # Brightness unit information
+
+        if not unit:
+            raise ValueError("No brightness unit information present in "
+                             f"{str(fitsfile)}")
+
+        if unit not in cls.VALID_UNITS:
+            raise ValueError("Please ensure unit is one of "
+                             f"{repr(cls.VALID_UNITS)[1:-1]}, not "
+                             f"'{unit}'")
 
         frame = {1950.0: 'fk4', 2000.0: 'fk5'}[equinox]
         coord0 = SkyCoord(ra_cr, dec_cr, unit=(u.degree, u.degree),
@@ -286,7 +296,8 @@ class _BaseSkyClass(ABC):
 
         # Private instance attributes
         self._frequencies = np.array([])
-        self._tb_data = np.empty((len(self._frequencies), self.n_y, self.n_x))
+        self._tb_data = np.empty((len(self._frequencies), self.n_y, self.n_x),
+                                 dtype=np.float32)
 
         # Call __post_init__ equivalent to dataclass' __post_init__
         self.__post_init__()
@@ -295,6 +306,7 @@ class _BaseSkyClass(ABC):
         pass
 
     def data(self, unit: str) -> npt.ArrayLike:
+        data_ = None
         if unit not in self.VALID_UNITS:
             errh.raise_error(ValueError,
                              f"Something has gone unexpectedly wrong. "
@@ -509,6 +521,12 @@ class _BaseSkyClass(ABC):
         # TODO: Implement check here that self is in field of view of template
 
         # Define temporary images
+        # Fail if frequency information doesn't match
+        if not self.same_spectral_setup(template):
+            errh.raise_error(ValueError,
+                             "Frequency information of sky class instance to be"
+                             " regridded does not match that of the template")
+
         sffx = generate_random_chars(10)
         template_mir_image = pathlib.Path(f'temp_template_image_{sffx}.im')
         input_mir_image = pathlib.Path(f'temp_input_image_{sffx}.im')
@@ -546,7 +564,7 @@ class _BaseSkyClass(ABC):
         return regridded_input_skyclass
 
     def frequency_present(self, freq: float,
-                          abs_tol: float = FREQ_TOL) -> Union[float, bool]:
+                          abs_tol: float = _FREQ_TOL) -> Union[float, bool]:
         """
         Check if frequency already present in SkyModel
 
@@ -566,17 +584,19 @@ class _BaseSkyClass(ABC):
 
         return False
 
+    @staticmethod
     def possess_similar_header(self, other: SkyModelType) -> bool:
         """
-        Ensure matching image sizes, frequencies and cell sizes. Acceptable
-        difference in cell sizes is the difference between the two pixel
-        sizes for which a misalignment of the pixel grids across the whole
-        image of less than half a pixel would be seen
+        Check if matching image sizes, frequencies and cell sizes between this
+        and another sky class instance. Acceptable difference in cell sizes is
+        the difference between the two pixel sizes for which a misalignment of
+        the pixel grids across the whole image of less than half a pixel would
+        be seen
 
         Parameters
         ----------
         other
-            Other SkyClass instance to check compatibility with
+            Other sky class instance for comparison
 
         Returns
         -------
@@ -599,6 +619,27 @@ class _BaseSkyClass(ABC):
 
         if not math.isclose(self.coord0.dec.deg, other.coord0.dec.deg,
                             rel_tol=rel_pix_tol):
+            return False
+
+        return True
+
+    def same_spectral_setup(self, other: SkyModelType) -> bool:
+        """
+        Check if matching frequencies are present in two sky class instances
+
+        Parameters
+        ----------
+        other
+            Other sky class instance for comparison
+
+        Returns
+        -------
+        True if same frequency information, False otherwise
+        """
+        if len(self.frequencies) != len(other.frequencies):
+            return False
+
+        if not all(self.frequencies == other.frequencies):
             return False
 
         return True
@@ -697,6 +738,7 @@ class GDSM(SkyComponent):
         super().__init__(npix, cdelt, coord0, model)
 
     def t_b(self, freq: float) -> np.ndarray:
+        gdsm = None
         if self.model == 'GSM2016':
             gdsm = GlobalSkyModel2016(freq_unit='Hz', data_unit='MJysr',
                                       resolution='hi')
@@ -790,8 +832,9 @@ class GSSM(SkyComponent):
 if __name__ == '__main__':
     import astropy.units as u
     import matplotlib.pylab as plt
-    from pathlib import Path
-    from astronomy import power_spectrum
+    from matplotlib import cm
+    from matplotlib.ticker import MultipleLocator
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     gdsm_cdelt = 0.0621480569243431  # Apparent pixel size of GDSM model
     nx, ny, cell_size = 512, 512, 8. / 512
@@ -801,23 +844,62 @@ if __name__ == '__main__':
     coord = SkyCoord(ra, dec, frame='fk5', unit=(u.hourangle, u.degree))
 
     gssm = GSSM(dims, cell_size, coord, model='MHD')
-    gdsm = GDSM([round(np.ceil(8. / gdsm_cdelt))] * 2, gdsm_cdelt, coord)
-    gdsm.add_frequency(gssm.frequencies)
-    gdsm_regridded = gdsm.regrid(gssm)
+    gdsm = GDSM(dims, gdsm_cdelt, coord, model='GSM2016')
+    spix = (np.log10(gssm.data('JY/PIXEL')[0] / gssm.data('JY/PIXEL')[-1]) /
+            np.log10(gssm.frequencies[0] / gssm.frequencies[-1]))
 
-    skymodel = SkyModel(dims, cell_size, coord)
+    plt.close('all')
 
-    for component in (gssm, gdsm_regridded):
-        skymodel.add_component(component)
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
 
-    skymodel.add_frequency(gssm.frequencies)
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("top", size="5%", pad=0.0)
 
-    gdsm_no_regrid_fits = Path("gdsm_not_regridded_Tb.fits")
-    gdsm_fits = Path("gdsm_regridded_Tb.fits")
-    gssm_fits = Path("gssm_Tb.fits")
-    skymodel_fits = Path("skymodel_Tb.fits")
+    cmap = cm.get_cmap('jet', 12)
+    im = ax.imshow(spix, vmin=-1.1, vmax=-.8, cmap=cmap,
+                   extent=(+gssm.n_x / 2 * gssm.cdelt,
+                           -gssm.n_x / 2 * gssm.cdelt,
+                           -gssm.n_y / 2 * gssm.cdelt,
+                           +gssm.n_y / 2 * gssm.cdelt))
+    plt.colorbar(im, cax=cax, ax=ax, orientation='horizontal')
+    cax.xaxis.tick_top()
 
-    gdsm.write_fits(gdsm_no_regrid_fits, unit='K')
-    gdsm_regridded.write_fits(gdsm_fits, unit='K')
-    gssm.write_fits(gssm_fits, unit='K')
-    skymodel.write_fits(skymodel_fits, unit='K')
+    ax.set_xticks(range(-4, 5)[::-1])
+    ax.set_yticks(range(-4, 5))
+
+    ax.yaxis.set_minor_locator(MultipleLocator(0.5))
+    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
+
+    ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
+                   right=True, direction='in')
+
+    ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
+    ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[deg\right]}$')
+
+    cax.set_xticks([-1.1, -1.0, -0.9, -0.8])
+
+    cax.text(0.5, 0.45, r'$\alpha$', transform=cax.transAxes,
+             horizontalalignment='center', verticalalignment='center')
+
+    plt.show()
+
+    # gdsm = GDSM([round(np.ceil(8. / gdsm_cdelt))] * 2, gdsm_cdelt, coord)
+    # gdsm.add_frequency(gssm.frequencies)
+    # gdsm_regridded = gdsm.regrid(gssm)
+    #
+    # skymodel = SkyModel(dims, cell_size, coord)
+    #
+    # for component in (gssm, gdsm_regridded):
+    #     skymodel.add_component(component)
+    #
+    # skymodel.add_frequency(gssm.frequencies)
+    #
+    # gdsm_no_regrid_fits = Path("gdsm_not_regridded_Tb.fits")
+    # gdsm_fits = Path("gdsm_regridded_Tb.fits")
+    # gssm_fits = Path("gssm_Tb.fits")
+    # skymodel_fits = Path("skymodel_Tb.fits")
+    #
+    # gdsm.write_fits(gdsm_no_regrid_fits, unit='K')
+    # gdsm_regridded.write_fits(gdsm_fits, unit='K')
+    # gssm.write_fits(gssm_fits, unit='K')
+    # skymodel.write_fits(skymodel_fits, unit='K')

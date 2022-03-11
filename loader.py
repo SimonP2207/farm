@@ -1,3 +1,6 @@
+"""
+All methods related to the loading of FARM configuration files
+"""
 import typing
 import pathlib
 import datetime

@@ -252,22 +252,24 @@ def get_dt_days(ra0_deg):
     return dt_days
 
 
-def bright_sources():
-    """Returns a list of bright A-team sources."""
-    # Sgr A: removed since will use Haslam instead
-    # For A: data from the Molonglo Southern 4 Jy sample (VizieR).
-    # Others from GLEAM reference paper, Hurley-Walker et al. (2017), Table 2.
-    return np.array((
-        [50.67375, -37.20833, 528, 0, 0, 0, 178e6, -0.51, 0, 0, 0, 0],  # For
-        [201.36667, -43.01917, 1370, 0, 0, 0, 200e6, -0.50, 0, 0, 0, 0],  # Cen
-        [139.52500, -12.09556, 280, 0, 0, 0, 200e6, -0.96, 0, 0, 0, 0],  # Hyd
-        [79.95833, -45.77889, 390, 0, 0, 0, 200e6, -0.99, 0, 0, 0, 0],  # Pic
-        [252.78333, 4.99250, 377, 0, 0, 0, 200e6, -1.07, 0, 0, 0, 0],  # Her
-        [187.70417, 12.39111, 861, 0, 0, 0, 200e6, -0.86, 0, 0, 0, 0],  # Vir
-        [83.63333, 22.01444, 1340, 0, 0, 0, 200e6, -0.22, 0, 0, 0, 0],  # Tau
-        [299.86667, 40.73389, 7920, 0, 0, 0, 200e6, -0.78, 0, 0, 0, 0],  # Cyg
-        [350.86667, 58.81167, 11900, 0, 0, 0, 200e6, -0.41, 0, 0, 0, 0]  # Cas
-    ))
+def ateam_sources():
+    """Loads and returns a list of bright A-team sources."""
+    from farm import DATA_FILES
+
+    data = []
+    with open(DATA_FILES['ATEAM'], 'rt') as f:
+        for line in f.readlines():
+            line = line.strip()
+            if line[0] == '#':
+                continue
+            try:
+                line = line[:line.index('#')]
+            except ValueError:
+                pass
+            line = [float(_.strip()) for _ in line.split(',')]
+            data.append(line)
+
+    return np.asarray(data)
 
 
 def angle_to_galactic_plane(coord: SkyCoord) -> float:
@@ -277,3 +279,7 @@ def angle_to_galactic_plane(coord: SkyCoord) -> float:
     l1, b1 = skypos1.galactic.l.degree, skypos1.galactic.b.degree
 
     return np.arctan2((l1 - l0), (b1 - b0))
+
+
+if __name__ == '__main__':
+    d = ateam_sources()

@@ -9,11 +9,12 @@ root_name = "OTST11"  # root name for all output files (not directory)
 
 # observation not yet incorporated in to FARM
 [observation]
-    time = 2027-01-01T12:00:01
-    duration = 14400  # s
-    n_scan = 5  # Number of observational 'scans' of target field
-    t_scan = 60  # Duration of each 'scan' of target field, s
-    [observation.field]
+  time = 2027-01-01T12:00:01
+  duration = 14400  # s
+  n_scan = 5  # Number of observational 'scans' of target field
+  t_scan = 60  # Duration of each 'scan' of target field, s
+
+  [observation.field]
     ra0 = "00:00:00.0"  # HH:MM:SS.S
     dec0 = "-30:00:00.00"  # DD:MM:SS.SS
     frame = "fk5"  # Astropy-compatible frame string

@@ -8,7 +8,7 @@ from typing import Union, TextIO
 
 from astropy.time import Time
 
-import errorhandling as errh
+import farm.errorhandling as errh
 import farm.software.common as sfuncs
 
 
