@@ -584,7 +584,6 @@ class _BaseSkyClass(ABC):
 
         return False
 
-    @staticmethod
     def possess_similar_header(self, other: SkyModelType) -> bool:
         """
         Check if matching image sizes, frequencies and cell sizes between this
@@ -658,7 +657,8 @@ class SkyComponent(_BaseSkyClass):
     def normalise(self, other: SkyModelType):
         """
         Adjust the SkyComponent instance's brightness in order to properly
-        recover the angular power spectrum of the combined power spectrum
+        recover the angular power spectrum of the combined power spectrum of
+        this and another SkyComponent instance
 
         Parameters
         ----------
