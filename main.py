@@ -16,8 +16,8 @@ import farm.astronomy as ast
 from software.miriad import miriad
 from software.oskar import set_oskar_sim_beam_pattern
 from software.oskar import run_oskar_sim_beam_pattern
-import farm.errorhandling as errh
-import farm.imagefunctions as imfunc
+import farm.error_handling as errh
+import farm.image_functions as imfunc
 from farm import LOGGER
 
 if __name__ == '__main__':

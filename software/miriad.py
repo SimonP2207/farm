@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 import warnings
-import farm.errorhandling as errh
+import farm.error_handling as errh
 import farm.software.common as sfuncs
 
 # __all__ = ["mir_commands", "MiriadError", "miriad"]

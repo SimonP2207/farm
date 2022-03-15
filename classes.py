@@ -8,7 +8,7 @@ import tempfile
 import math
 import random
 from abc import ABC, abstractmethod
-from typing import Tuple, Union, TypeVar
+from typing import Tuple, List, Union, TypeVar
 
 import numpy.typing as npt
 import numpy as np
@@ -21,7 +21,7 @@ from pygdsm import GlobalSkyModel2016
 
 from farm import LOGGER, DATA_FILES
 from farm import decorators
-from . import errorhandling as errh
+from . import error_handling as errh
 from . import astronomy as ast
 from .software import miriad
 
@@ -68,8 +68,8 @@ def fits_equinox(fitsfile: pathlib.Path) -> float:
 
 def fits_hdr_and_data(fitsfile: pathlib.Path) -> Tuple[Header, np.ndarray]:
     """Return header and data from a .fits image/cube"""
-    hdulist = fits.open(fitsfile)[0]
-    return hdulist.header, hdulist.data
+    with fits.open(fitsfile) as hdulist:
+        return hdulist[0].header, hdulist[0].data
 
 
 def fits_frequencies(fitsfile: pathlib.Path) -> np.ndarray:
@@ -236,8 +236,8 @@ class _BaseSkyClass(ABC):
             If fitsfile doesn't exist
 
         ValueError
-            If the units found in the .fits header are not one of the class
-            variable VALID_UNITS or are not understood
+            If the units found in the .fits header are not one of {0} or are not
+            understood
         """
         LOGGER.info(f"Loading {str(fitsfile.resolve())}")
         if not fitsfile.exists():
@@ -289,6 +289,17 @@ class _BaseSkyClass(ABC):
         return sky_model
 
     def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord):
+        """
+        Parameters
+        ----------
+        n_pix
+            Number of pixels in x (R.A.) and y (declination) as a 2-tuple
+        cdelt
+            Pixel size [deg]
+        coord0
+            Central coordinate (corresponds to the fits-header CRVAL1 and
+            CRVAL2 keywords) as a astropy.coordnates.SkyCoord instance
+        """
         # Attributes created from constructor args
         self.n_x, self.n_y = n_pix
         self.cdelt = cdelt
@@ -305,7 +316,25 @@ class _BaseSkyClass(ABC):
     def __post_init__(self):
         pass
 
+    @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
     def data(self, unit: str) -> npt.ArrayLike:
+        """
+        Sky distribution image cube
+
+        Parameters
+        ----------
+        unit
+            One of {0}
+        Returns
+        -------
+            np.ndarray of dimensions (len(self.frequencies), self.n_y, self.n_x)
+            containing sky brightness distribution in units of 'unit'
+
+        Raises
+        ------
+        ValueError
+            If the given unit is not one of {0}, or is not understood
+        """
         data_ = None
         if unit not in self.VALID_UNITS:
             errh.raise_error(ValueError,
@@ -654,9 +683,10 @@ class SkyComponent(_BaseSkyClass):
     def model(self):
         return self._model
 
-    def normalise(self, other: SkyModelType):
+    def normalise(self, other: SkyModelType,
+                  inplace: bool = False) -> Union[None, SkyModelType]:
         """
-        Adjust the SkyComponent instance's brightness in order to properly
+        Adjust the SkyComponent instance's brightness data in order to properly
         recover the angular power spectrum of the combined power spectrum of
         this and another SkyComponent instance
 
@@ -665,50 +695,134 @@ class SkyComponent(_BaseSkyClass):
         other
             Other SkyComponent instance to normalise to. This should be the
             SkyComponent defining the low end of the angular power spectrum
-
+        inplace
+            Whether to normalise the sky brightness distribution of the original
+            instance (inplace=True) or return a new instance with the normalised
+            brightness data (inplace=False). Default is False
         Returns
         -------
         None
         """
-        self_data = self.data(unit='K')
+        self_sum_td_nu = np.nansum(self.data(unit='JY/SR'), axis=(1, 2))
+        other_sum_td_nu = np.nansum(other.data(unit='JY/SR'), axis=(1, 2))
 
-        self_sum_td_nu = np.nansum(self.data(unit='K'), axis=(1, 2))
-        other_sum_td_nu = np.nansum(other.data(unit='K'), axis=(1, 2))
+        scalings = (other_sum_td_nu / self_sum_td_nu)[:, np.newaxis, np.newaxis]
 
-        self_data *= (other_sum_td_nu / self_sum_td_nu)[:, None, None]
+        if inplace:
+            self._tb_data *= scalings
 
-        self._tb_data = self_data
+        else:
+            new_skymodeltype = copy.deepcopy(self)
+            new_skymodeltype._tb_data *= scalings
+            return new_skymodeltype
 
     def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
         raise NotImplementedError
 
 
 class SkyModel(_BaseSkyClass):
-    def __post_init__(self):
-        super().__post_init__()
+    def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
+                 frequencies: npt.ArrayLike):
+        """
+
+        Parameters
+        ----------
+        n_pix
+            Number of pixels in x (R.A.) and y (declination) as a 2-tuple
+        cdelt
+            Pixel size [deg]
+        coord0
+            Central coordinate (corresponds to the fits-header CRVAL1 and
+            CRVAL2 keywords) as a astropy.coordinates.SkyCoord instance
+        frequencies
+            Frequencies corresponding to the SkyModel instance's desired sky
+            brightness distribution cube's spectral axis
+        """
+        # Attributes created from constructor args
+        self.n_x, self.n_y = n_pix
+        self.cdelt = cdelt
+        self.coord0 = coord0
+        self._frequencies = frequencies
+
+        # Private instance attributes
+        self._tb_data = np.zeros((len(self.frequencies), self.n_y, self.n_x))
         self._components = []
 
-    def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
-        data_ = np.zeros((self.n_y, self.n_x))
-        for component_ in self.components:
-            data_ += component_.i_nu(freq)
+    def t_b(self, freq: float) -> np.ndarray:
+        idx = np.squeeze(np.isclose(self.frequencies, freq, atol=1.))
 
-        return ast.intensity_to_tb(data_, freq)
+        return self._tb_data[idx]
 
     @property
     def components(self):
         return self._components
 
-    def add_component(self, new_component: SkyComponent):
-        if not isinstance(new_component, SkyComponent):
+    @property
+    def frequencies(self):
+        return self._frequencies
+
+    @frequencies.setter
+    def frequencies(self, *args, **kwargs):
+        pass
+
+    def __add__(self, other: Union[List[SkyComponent],
+                                   Tuple[SkyComponent],
+                                   npt.ArrayLike, SkyComponent]) -> 'SkyModel':
+        """
+        Magic __add__ method used for a convenient interface with the
+        SkyModel.add_component method
+        """
+        self.add_component(other)
+        return self
+
+    def add_component(self, new_component: Union[List[SkyComponent],
+                                                 Tuple[SkyComponent],
+                                                 npt.ArrayLike, SkyComponent]):
+        """
+        Adds a SkyComponent instance to the SkyModel and adds its contribution
+        to the SkyModel's brightness temperature distribution
+
+        Parameters
+        ----------
+        new_component
+            SkyComponent instance, or iterable containing SkyComponent instances
+
+        Raises
+        -------
+        TypeError
+            If one of components/the component being added is not an instance of
+            the SkyComponent class or its children
+        """
+        if isinstance(new_component, (list, tuple, np.ndarray)):
+            for component in new_component:
+                self.add_component(component)
+
+        elif not isinstance(new_component, SkyComponent):
             raise TypeError("Only SkyComponent instances can be added to "
                             f"SkyModel, not a {type(new_component)} instance")
 
-        if not self.possess_similar_header(new_component):
-            errh.raise_error(ValueError,
-                             f"{new_component} incompatible with sky model")
+        else:
+            if not self.possess_similar_header(new_component):
+                errh.raise_error(ValueError,
+                                 f"{new_component} incompatible with sky model")
 
-        self._components.append(new_component)
+            self._components.append(new_component)
+            self._tb_data += ast.intensity_to_tb(
+                new_component.data(unit='JY/SR'), new_component.frequencies
+            )
+
+    def add_frequency(self, *args, **kwargs):
+        """
+        Raises
+        ------
+        NotImplementedError
+            Since SkyModel frequencies should only be assigned to a SkyModel
+            instance upon its creation, this error is raised to avoid user
+            issues arising from misuse of the inherited
+            _BaseSkyClass.add_frequency method
+        """
+        raise NotImplementedError("SkyModel frequencies can only be defined "
+                                  "upon creation of the SkyModel instance")
 
 
 class GDSM(SkyComponent):
@@ -848,79 +962,3 @@ class GSSM(SkyComponent):
     def t_b(self, freq: float) -> np.ndarray:
         if self.model == 'MHD':
             return self.data('K')[np.where(self.frequencies == freq)[0][0]]
-
-
-if __name__ == '__main__':
-    import astropy.units as u
-    import matplotlib.pylab as plt
-    from matplotlib import cm
-    from matplotlib.ticker import MultipleLocator
-    from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-    gdsm_cdelt = 0.0621480569243431  # Apparent pixel size of GDSM model
-    nx, ny, cell_size = 512, 512, 8. / 512
-    ra, dec = "01:02:03.4", "05:06:07.89"
-
-    dims = (nx, ny)
-    coord = SkyCoord(ra, dec, frame='fk5', unit=(u.hourangle, u.degree))
-
-    gssm = GSSM(dims, cell_size, coord, model='MHD')
-    gdsm = GDSM(dims, gdsm_cdelt, coord, model='GSM2016')
-    spix = (np.log10(gssm.data('JY/PIXEL')[0] / gssm.data('JY/PIXEL')[-1]) /
-            np.log10(gssm.frequencies[0] / gssm.frequencies[-1]))
-
-    plt.close('all')
-
-    fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("top", size="5%", pad=0.0)
-
-    cmap = cm.get_cmap('jet', 12)
-    im = ax.imshow(spix, vmin=-1.1, vmax=-.8, cmap=cmap,
-                   extent=(+gssm.n_x / 2 * gssm.cdelt,
-                           -gssm.n_x / 2 * gssm.cdelt,
-                           -gssm.n_y / 2 * gssm.cdelt,
-                           +gssm.n_y / 2 * gssm.cdelt))
-    plt.colorbar(im, cax=cax, ax=ax, orientation='horizontal')
-    cax.xaxis.tick_top()
-
-    ax.set_xticks(range(-4, 5)[::-1])
-    ax.set_yticks(range(-4, 5))
-
-    ax.yaxis.set_minor_locator(MultipleLocator(0.5))
-    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
-
-    ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
-                   right=True, direction='in')
-
-    ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
-    ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[deg\right]}$')
-
-    cax.set_xticks([-1.1, -1.0, -0.9, -0.8])
-
-    cax.text(0.5, 0.45, r'$\alpha$', transform=cax.transAxes,
-             horizontalalignment='center', verticalalignment='center')
-
-    plt.show()
-
-    # gdsm = GDSM([round(np.ceil(8. / gdsm_cdelt))] * 2, gdsm_cdelt, coord)
-    # gdsm.add_frequency(gssm.frequencies)
-    # gdsm_regridded = gdsm.regrid(gssm)
-    #
-    # skymodel = SkyModel(dims, cell_size, coord)
-    #
-    # for component in (gssm, gdsm_regridded):
-    #     skymodel.add_component(component)
-    #
-    # skymodel.add_frequency(gssm.frequencies)
-    #
-    # gdsm_no_regrid_fits = Path("gdsm_not_regridded_Tb.fits")
-    # gdsm_fits = Path("gdsm_regridded_Tb.fits")
-    # gssm_fits = Path("gssm_Tb.fits")
-    # skymodel_fits = Path("skymodel_Tb.fits")
-    #
-    # gdsm.write_fits(gdsm_no_regrid_fits, unit='K')
-    # gdsm_regridded.write_fits(gdsm_fits, unit='K')
-    # gssm.write_fits(gssm_fits, unit='K')
-    # skymodel.write_fits(skymodel_fits, unit='K')

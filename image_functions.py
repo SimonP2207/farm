@@ -2,6 +2,29 @@
 All methods/classes related to image handling
 """
 import numpy as np
+from .classes import SkyModelType
+
+
+def calculate_spix(sky_model_type: SkyModelType) -> np.ndarray:
+    """
+    Calculate the spectral index across a SkyModel or Skycomponent instance
+    field of view
+
+    Parameters
+    ----------
+    sky_model_type
+        SkyModel or SkyComponent
+
+    Returns
+    -------
+    Spectral indices as a 2-dimensional np.ndarray of shape
+    (sky_model_type.n_y, sky_model_type.n_x)
+    """
+    spix = (np.log10(sky_model_type.data('JY/PIXEL')[0] /
+                     sky_model_type.data('JY/PIXEL')[-1]) /
+            np.log10(sky_model_type.frequencies[0] /
+                     sky_model_type.frequencies[-1]))
+    return spix
 
 
 def crop_frac(img, fracx, fracy):

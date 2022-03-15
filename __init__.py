@@ -14,3 +14,4 @@ DATA_FILES = {'MHD': _data_dcy.joinpath('Gsynch_SKAs.fits'),
               'ATEAM': _data_dcy.joinpath('ateam.data')}
 
 from .classes import GDSM, GSSM, SkyModel
+from . import plotting_functions
