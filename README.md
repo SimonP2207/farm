@@ -63,9 +63,10 @@ python3 /path/to/farm/main.py /path/to/config.toml
 ```
 ### As an imported library
 ```python
-import farm
+from pathlib import Path
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+import farm
 
 dims  = 512, 512  # n_pixels in x/R.A., n_pixels in y/declination
 field_of_view = 8.  # deg
@@ -87,11 +88,11 @@ gdsm.add_frequency(gssm.frequencies)
 
 # Create SkyModel instance which will handle the combination of the various 
 # SkyComponent instances. Add frequency information to it
-skymodel = farm.SkyModel(dims, cell_size, coord)
-skymodel.add_frequency(gssm.frequencies)
+skymodel = farm.SkyModel(dims, cell_size, coord, gssm.frequencies)
 
 # Add individual SkyComponent instances to the SkyModel
-skymodel.add_component(gssm)
-skymodel.add_component(gdsm)
+skymodel += (gssm, gdsm)  # Equivalent to skymodel.add_component((gssm, gdsm))
 
+# Write the sky model to a .fits file
+skymodel.write_fits(Path("test_skymodel_Inu.fits"), unit='JY/SR')
 ```
