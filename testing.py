@@ -1,36 +1,35 @@
 from pathlib import Path
-
-import numpy as np
-import matplotlib.pylab as plt
-from matplotlib import cm
-from matplotlib.ticker import MultipleLocator
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-
 import farm
 
-nx, ny, cell_size = 512, 512, 8. / 512
-ra, dec = "01:02:03.4", "05:06:07.89"
+dims  = 512, 512  # n_pixels in x/R.A., n_pixels in y/declination
+field_of_view = 8.  # deg
+cell_size = field_of_view / dims[0]  # deg
 
-dims = (nx, ny)
-coord = SkyCoord(ra, dec, frame='fk5', unit=(u.hourangle, u.degree))
+coord = SkyCoord("01:02:03.4", "05:06:07.89",
+                 frame='fk5', unit=(u.hourangle, u.degree))
 
-gssm = farm.GSSM(dims, cell_size, coord, model='MHD')
-gdsm = farm.GDSM(dims, cell_size, coord, model='GSM2016')
+# Use MHD model for Galactic small-scale structure SkyComponent. This is loaded
+# from data/Gsynch_SKAs.fits directly and thus its frequency information is
+# fixed.
+gssm = farm.SkyComponent.load_from_fits(fitsfile=farm.DATA_FILES['MHD'],
+                                        name='GSSM', cdelt=cell_size,
+                                        coord0=coord)
+
+# Use GSM2016 model (Zheng et al, 2016) for Galactic diffuse-scale structure
+# SkyComponent. Add the same frequencies as the GSSM sky component to enable
+# combination.
+gdsm = farm.SkyComponent(name='GDSM', npix=dims, cdelt=cell_size, coord0=coord,
+                         tb_func=farm.tb_functions.gdsm2016_t_b)
+gdsm.add_frequency(gssm.frequencies)
+
+# Create SkyModel instance which will handle the combination of the various
+# SkyComponent instances. Add frequency information to it
 skymodel = farm.SkyModel(dims, cell_size, coord, gssm.frequencies)
 
-gdsm.add_frequency(gssm.frequencies)
-gssm.normalise(gdsm, inplace=True)
+# Add individual SkyComponent instances to the SkyModel
+skymodel += (gssm, gdsm)  # Equivalent to skymodel.add_component((gssm, gdsm))
 
-skymodel += (gssm, gdsm)
-
-gdsm_cdelt = 0.0621480569243431  # Apparent pixel size of GDSM model
-nx, ny, cell_size = 512, 512, 8. / 512
-ra, dec = "01:02:03.4", "05:06:07.89"
-
-farm.plotting_functions.plot_spix(skymodel)
-
-gssm.write_fits(Path("test_gssm.fits"), unit='K')
-gdsm.write_fits(Path("test_gdsm.fits"), unit='K')
-skymodel.write_fits(Path("test_skymodel.fits"), unit='K')
+# Write the sky model to a .fits file
+skymodel.write_fits(Path("test_skymodel_Inu.fits"), unit='JY/SR')

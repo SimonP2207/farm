@@ -78,12 +78,15 @@ coord = SkyCoord("01:02:03.4", "05:06:07.89",
 # Use MHD model for Galactic small-scale structure SkyComponent. This is loaded 
 # from data/Gsynch_SKAs.fits directly and thus its frequency information is 
 # fixed.
-gssm = farm.GSSM(dims, cell_size, coord, model='MHD')
+gssm = farm.SkyComponent.load_from_fits(fitsfile=farm.DATA_FILES['MHD'],
+                                        name='GSSM', cdelt=cell_size,
+                                        coord0=coord)
 
 # Use GSM2016 model (Zheng et al, 2016) for Galactic diffuse-scale structure 
 # SkyComponent. Add the same frequencies as the GSSM sky component to enable 
 # combination.
-gdsm = farm.GDSM(dims, cell_size, coord, model='GSM2016')
+gdsm = farm.SkyComponent(dims, cell_size, coord,
+                         tb_func=farm.tb_functions.gdsm2016_t_b)
 gdsm.add_frequency(gssm.frequencies)
 
 # Create SkyModel instance which will handle the combination of the various 

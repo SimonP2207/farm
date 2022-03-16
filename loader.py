@@ -62,10 +62,10 @@ def check_config_validity(config_dict: dict):
 
     for sky_model in ('21cm', 'GDSM', 'GSSM', 'PS'):
         if config_dict["sky_models"][sky_model]["include"]:
-            if config_dict["sky_models"][sky_model]["image"] == '':
-                errh.raise_error(ValueError,
-                                 f"If including {sky_model} sky model, must "
-                                 "specify a valid path for image")
+            # if config_dict["sky_models"][sky_model]["image"] == '':
+            #     errh.raise_error(ValueError,
+            #                      f"If including {sky_model} sky model, must "
+            #                      "specify a valid path for image")
 
             if not config_dict["sky_models"][sky_model]["create"]:
                 im = pathlib.Path(config_dict["sky_models"][sky_model]["image"])

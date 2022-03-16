@@ -1,3 +1,7 @@
+"""
+Contains all plotting related functionality, matplotlib being data visualisation
+tool-of-choice
+"""
 from typing import Union
 import numpy as np
 import matplotlib.pylab as plt
@@ -8,6 +12,33 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from .classes import SkyModelType
 from .image_functions import calculate_spix
+
+
+# def login_required(f):
+#     # This function is what we "replace" hello with
+#     def wrapper(*args, **kw):
+#         args[0].client_session['test'] = True
+#         logged_in = 0
+#         if logged_in:
+#             return f(*args, **kw)  # Call hello
+#         else:
+#             return redirect(url_for('login'))
+#     return wrapper
+#
+#
+# from functools import wraps
+# def create_ax_if_needed(f):
+#     @wraps(f)
+#     def wrapper(*args, **kwargs):
+#         args_to_kwargs = dict(zip(f.__code__.co_varnames, args))
+#         if 'ax' in args_to_kwargs or 'ax' in kwargs:
+#
+#
+#         return f(*args, **kwargs)
+#     return wrapper
+
+
+
 
 
 def plot_spix(sky_model_type: SkyModelType, precision: float = 0.1,
@@ -52,6 +83,29 @@ def plot_spix(sky_model_type: SkyModelType, precision: float = 0.1,
 
     cax.text(0.5, 0.45, r'$\alpha$', transform=cax.transAxes,
              horizontalalignment='center', verticalalignment='center')
+
+    if not savefig:
+        plt.show()
+    else:
+        fig.savefig(savefig, dpi=300, bbox_inches='tight')
+
+
+def plot_power_spectrum(sky_model_type: SkyModelType, freq: float,
+                        ax: Union[None, matplotlib.axes.Axes] = None,
+                        savefig: Union[str, bool] = False):
+    import powerbox as pbox
+
+    p_k_field, bins_field = pbox.get_power(sky_model_type.t_b(freq),
+                                           (0.002, 0.002,))
+
+    if ax is None:
+        plt.close('all')
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
+
+    ax.plot(bins_field, p_k_field, 'b-')
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
 
     if not savefig:
         plt.show()

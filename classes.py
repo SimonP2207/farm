@@ -8,7 +8,7 @@ import tempfile
 import math
 import random
 from abc import ABC, abstractmethod
-from typing import Tuple, List, Union, TypeVar
+from typing import Tuple, List, Union, TypeVar, Callable, Protocol
 
 import numpy.typing as npt
 import numpy as np
@@ -20,15 +20,24 @@ from reproject import reproject_from_healpix
 from pygdsm import GlobalSkyModel2016
 
 from farm import LOGGER, DATA_FILES
-from farm import decorators
+from . import decorators
 from . import error_handling as errh
 from . import astronomy as ast
+from . import tb_functions as tb_func
 from .software import miriad
 
 
+# Typing related code
 SkyModelType = TypeVar('SkyModelType', bound='_BaseSkyClass')
 
 
+class TbFunction(Protocol):
+    def __call__(self, sky_component: 'TestSkyComponent',
+                 freq: Union[float, npt.NDArray[np.float32]]) -> np.ndarray: ...
+
+
+# Miscellaneous functions
+# TODO: Relocate these to a sensible module
 def fits_bunit(fitsfile: pathlib.Path) -> str:
     """
     Get brightness unit from .fits header. If 'BUNIT' not present in .fits
@@ -217,7 +226,9 @@ class _BaseSkyClass(ABC):
 
     @classmethod
     @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
-    def load_from_fits(cls, fitsfile: pathlib.Path) -> 'SkyComponent':
+    def load_from_fits(cls, fitsfile: pathlib.Path,
+                       name: str = "", cdelt: float = None,
+                       coord0: SkyCoord = None) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits cube
 
@@ -225,6 +236,9 @@ class _BaseSkyClass(ABC):
         ----------
         fitsfile
             Full path to .fits file
+        name
+            Name to assign to the model. If not given, the fits filename
+            (without the file type) will be given by default
 
         Returns
         -------
@@ -250,9 +264,6 @@ class _BaseSkyClass(ABC):
             errh.raise_error(ValueError, ".fits must be a cube (3D), but has "
                                          f"{data.ndim} dimensions")
 
-        # Image information
-        nx_, ny_, cdelt_ = hdr["NAXIS1"], hdr["NAXIS2"], hdr["CDELT2"]
-        ra_cr, dec_cr = hdr["CRVAL1"], hdr["CRVAL2"]
         freqs = fits_frequencies(fitsfile)  # Spectral axis information
         equinox = fits_equinox(fitsfile)  # 1950.0 or 2000.0
         unit = fits_bunit(fitsfile)  # Brightness unit information
@@ -266,23 +277,29 @@ class _BaseSkyClass(ABC):
                              f"{repr(cls.VALID_UNITS)[1:-1]}, not "
                              f"'{unit}'")
 
-        frame = {1950.0: 'fk4', 2000.0: 'fk5'}[equinox]
-        coord0 = SkyCoord(ra_cr, dec_cr, unit=(u.degree, u.degree),
-                          frame=frame)
+        # Image information
+        nx, ny = hdr["NAXIS1"], hdr["NAXIS2"]
 
-        if unit not in cls.VALID_UNITS:
-            errh.raise_error(ValueError,
-                             f"Something has gone unexpectedly wrong. "
-                             f"Unit in loaded .fits image is '{unit}'")
-        else:
-            if unit == 'K':
-                pass
-            elif unit == 'JY/SR':
-                data = ast.intensity_to_tb(data, freqs)
-            elif unit == 'JY/PIXEL':
-                data = ast.flux_to_tb(data, freqs, np.radians(cdelt_) ** 2.)
+        if cdelt is None:
+            cdelt = hdr["CDELT2"]
 
-        sky_model = SkyComponent((nx_, ny_), cdelt=cdelt_, coord0=coord0)
+        if coord0 is None:
+            frame = {1950.0: 'fk4', 2000.0: 'fk5'}[equinox]
+            coord0 = SkyCoord(hdr["CRVAL1"], hdr["CRVAL2"], unit=(u.deg, u.deg),
+                              frame=frame)
+
+        if unit == 'K':
+            pass
+        elif unit == 'JY/SR':
+            data = ast.intensity_to_tb(data, freqs)
+        elif unit == 'JY/PIXEL':
+            data = ast.flux_to_tb(data, freqs, np.radians(cdelt) ** 2.)
+
+        if name == "":
+            name = fitsfile.name.strip('.fits')[0]
+
+        sky_model = SkyComponent(name, (nx, ny), cdelt=cdelt,
+                                 coord0=coord0, tb_func=tb_func.fits_t_b)
         sky_model._frequencies = freqs
         sky_model._tb_data = data
 
@@ -592,6 +609,35 @@ class _BaseSkyClass(ABC):
 
         return regridded_input_skyclass
 
+    def rotate(self, angle: float,
+               inplace: bool=True) -> Union[None, SkyModelType]:
+        """
+        Rotate the sky brightness distribution by specified angle
+
+        Parameters
+        ----------
+        angle
+            Angle with which to rotate brightness distribution
+            counter-clockwise [radians]
+        inplace
+            Whether to rotate the sky brightness distribution of the original
+            instance (inplace=True) or return a new instance with the rotated
+            brightness data (inplace=False). Default is True
+
+        Returns
+        -------
+        None if inplace=True, or SkyComponent instance if inplace=False
+        """
+        from .image_functions import rotate_image
+        rotated_data = rotate_image(self._tb_data, angle, x_axis=2, y_axis=1)
+
+        if inplace:
+            self._tb_data = rotated_data
+        else:
+            new_skymodel_type = copy.deepcopy(self)
+            new_skymodel_type._tb_data = rotated_data
+            return new_skymodel_type
+
     def frequency_present(self, freq: float,
                           abs_tol: float = _FREQ_TOL) -> Union[float, bool]:
         """
@@ -674,10 +720,11 @@ class _BaseSkyClass(ABC):
 
 
 class SkyComponent(_BaseSkyClass):
-    def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
-                 model: Union[None, str] = None):
-        super().__init__(n_pix, cdelt, coord0)
-        self._model = model
+    def __init__(self, name: str, npix: Tuple[int, int], cdelt: float,
+                 coord0: SkyCoord, tb_func: TbFunction):
+        super().__init__(npix, cdelt, coord0)
+        self.name = name
+        self._tb_func = tb_func
 
     @property
     def model(self):
@@ -701,7 +748,7 @@ class SkyComponent(_BaseSkyClass):
             brightness data (inplace=False). Default is False
         Returns
         -------
-        None
+        None if inplace=True, or SkyComponent instance if inplace=False
         """
         self_sum_td_nu = np.nansum(self.data(unit='JY/SR'), axis=(1, 2))
         other_sum_td_nu = np.nansum(other.data(unit='JY/SR'), axis=(1, 2))
@@ -716,8 +763,8 @@ class SkyComponent(_BaseSkyClass):
             new_skymodeltype._tb_data *= scalings
             return new_skymodeltype
 
-    def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
-        raise NotImplementedError
+    def t_b(self, freq: Union[float, npt.NDArray[np.float32]]) -> npt.NDArray[np.float32]:
+        return self._tb_func(self, freq)
 
 
 class SkyModel(_BaseSkyClass):
@@ -823,142 +870,3 @@ class SkyModel(_BaseSkyClass):
         """
         raise NotImplementedError("SkyModel frequencies can only be defined "
                                   "upon creation of the SkyModel instance")
-
-
-class GDSM(SkyComponent):
-    """
-    Diffuse, large-scale sky model for Galactic emission
-
-    Class Attributes
-    ----------
-    VALID_MODELS : tuple of str
-        Models valid to instantiate a DiffuseSkyModel instance with
-
-    Attributes
-    ----------
-    model : str
-        Model used to instantiate the instance and calculate the brightness
-        temperature distribution
-    """
-    VALID_MODELS = ('GSM2016',)  # Valid Galactic sky models
-
-    def __init__(self, npix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
-                 model: str = 'GSM2016'):
-        """
-        Extends the behaviour of superclass constructor method by requiring a
-        model for the Galactic diffuse emission
-
-        Parameters
-        ----------
-        npix
-            Number if pixels in (x, y) of the SkyModel
-        cdelt
-            Pixel size [deg]
-        coord0
-            Central coordinate of SkyModel
-        model
-            Model with which to calculate brightness temperature distribution.
-            See class variable 'VALID_MODELS' for accepted values. Default is
-            'GSM2016'
-
-        Raises
-        ------
-        ValueError
-            When 'model' value is not in DiffuseSkyModel.VALID_MODELS
-        """
-        if model not in self.VALID_MODELS:
-            errh.raise_error(ValueError,
-                             f"{model} not a valid diffuse model")
-
-        super().__init__(npix, cdelt, coord0, model)
-
-    def t_b(self, freq: float) -> np.ndarray:
-        gdsm = None
-        if self.model == 'GSM2016':
-            gdsm = GlobalSkyModel2016(freq_unit='Hz', data_unit='MJysr',
-                                      resolution='hi')
-        else:
-            errh.raise_error(ValueError,
-                             f"{self.model} is not a recognised model for "
-                             f"DiffuseSkyModel class. This should have been "
-                             f"caught within the __init__ constructor method?")
-
-        temp_fitsfile = pathlib.Path(f'temp{generate_random_chars(10)}.fits')
-
-        gdsm.generate(freq)
-        gdsm.write_fits(str(temp_fitsfile))  # expects str type
-
-        hdugsm = fits.open(temp_fitsfile)
-        hdugsm[1].header.set('COORDSYS', 'G')
-
-        temp_fitsfile.unlink()
-
-        i_nu = np.single(reproject_from_healpix(hdugsm[1], self.header2d))[0]
-        i_nu *= 1e6  # MJy/sr -> Jy/sr
-
-        return ast.intensity_to_tb(i_nu, freq)
-
-
-class GSSM(SkyComponent):
-    """
-    Small-scale (e.g. filamentary) sky model for Galactic emission
-
-    Class Attributes
-    ----------
-    VALID_MODELS : tuple of str
-        Models valid to instantiate a SmallSkyModel instance with
-
-    Attributes
-    ----------
-    model : str
-        Model used to instantiate the instance and calculate the brightness
-        temperature distribution
-    """
-    VALID_MODELS = ('MHD',)  # Valid Galactic sky models
-
-    @decorators.docstring_parameter(str(VALID_MODELS)[1:-1])
-    def __init__(self, npix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
-                 model: str = 'MHD'):
-        """
-        Extends the behaviour of superclass constructor method by requiring a
-        model for the Galactic small_scale emission
-
-        Parameters
-        ----------
-        npix
-            Number of pixels in (x, y), or (ra, dec)
-        cdelt
-            Pixel size [deg]
-        coord0
-            Central coordinate of SkyModel
-        model
-            Model with which to calculate brightness temperature distribution.
-            See class variable 'VALID_MODELS' for accepted values. Default is
-            'MHD', for which a new GSSM instance is instantiated
-
-        Raises
-        ------
-        ValueError
-            When 'model' arg is not one of {0}
-        """
-        if model not in self.VALID_MODELS:
-            errh.raise_error(ValueError,
-                             f"{model} not a valid short-scale model")
-
-        if model == 'MHD':
-            sm = self.load_from_fits(DATA_FILES["MHD"])
-            if npix != (sm.n_x, sm.n_y):
-                errh.issue_warning(UserWarning,
-                                   "For MHD GSSM model, must adopt image size "
-                                   f"of {sm.n_x} x {sm.n_y}. Ignoring request "
-                                   f"for {npix[0]} x {npix[1]}")
-
-            super().__init__((sm.n_x, sm.n_y), cdelt, coord0,)
-            self._frequencies = sm.frequencies
-            self._tb_data = sm.data(unit='K')
-
-        self._model = model
-
-    def t_b(self, freq: float) -> np.ndarray:
-        if self.model == 'MHD':
-            return self.data('K')[np.where(self.frequencies == freq)[0][0]]

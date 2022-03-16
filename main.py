@@ -1,23 +1,20 @@
-import shutil
 import sys
 import logging
 import argparse
 import pathlib
 from datetime import datetime
 
+import farm
 import numpy as np
-from astropy.io import fits
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
 import farm.loader as loader
-import farm.classes as classes
 import farm.astronomy as ast
-from farm.software.miriad import miriad
+import farm.error_handling as errh
+import farm.tb_functions as tb_funcs
 from farm.software.oskar import set_oskar_sim_beam_pattern
 from farm.software.oskar import run_oskar_sim_beam_pattern
-import farm.error_handling as errh
-import farm.image_functions as imfunc
 from farm import LOGGER
 
 if __name__ == '__main__':
@@ -30,7 +27,7 @@ if __name__ == '__main__':
         config_file = pathlib.Path(args.config_file)
 
     else:
-        config_file = pathlib.Path("config.toml")
+        config_file = pathlib.Path(farm.DATA_FILES['EXAMPLE_CONFIG'])
 # ############################################################################ #
 # ###################### PARSE CONFIGURATION ################################# #
 # ############################################################################ #
@@ -104,42 +101,56 @@ if __name__ == '__main__':
     freqs = np.linspace(freq_min, freq_max, nchan)
     freq_inc = freqs[1] - freqs[0]
     start_utc = ast.get_start_time(coord0.ra.deg, length_sec)
+    sky_model = farm.SkyModel((nx, ny), cdelt, coord0, freqs)
+    components = []
+# ############################################################################ #
+# ####################### Large-scale foreground model ####################### #
+# ############################################################################ #
+    if cfg["sky_models"]["GDSM"]["include"]:
+        if cfg["sky_models"]["GDSM"]["create"]:
+            gdsm = farm.SkyComponent('GDSM', (nx, ny), cdelt=cdelt,
+                                     coord0=coord0,
+                                     tb_func=tb_funcs.gdsm2016_t_b)
+            gdsm.add_frequency(freqs)
+        else:
+            errh.raise_error(ValueError,
+                             "Loading GDSM from image not currently supported")
+            if not gdsmfile.exists():
+                raise FileNotFoundError("Check path for GDSM image")
+            gdsm = farm.SkyComponent.load_from_fits(gdsmfile, 'GDSM')
+        components.append(gdsm)
+    else:
+        gdsm = None
 # ############################################################################ #
 # ##################### Small-scale foreground model ######################### #
 # ############################################################################ #
-    # if cfg["sky_models"]["GSSM"]["include"]:
-    #     if cfg["sky_models"]["GSSM"]["create"]:
-    #         errh.raise_error(ValueError,
-    #                          "Currently can only load GSSM model from image")
-    #     else:
-    #         if not gssmfile.exists():
-    #             errh.raise_error(FileNotFoundError, "Check path for GSSM image")
-    #         gssm = classes.SmallSkyModel((512, 512), fov_deg / 512 * 1.05,
-    #                                      coord0, 'MHD')
-    # else:
-    #     gssm = None
-    #
-    # # Rotate GSSM to align filamentary structure with Galactic B-field
-    # rotation_angle = ast.angle_to_galactic_plane(coord0)
-    # gssm.data = imfunc.rotate_image(gssm.data, phi=rotation_angle)
-# # ############################################################################ #
-# # ####################### Large-scale foreground model ####################### #
-# # ############################################################################ #
-    # if cfg["sky_models"]["GDSM"]["include"]:
-    #     if cfg["sky_models"]["GDSM"]["create"]:
-    #         gdsm = classes.DiffuseSkyModel((nx, ny), cdelt=48. / 60.,
-    #                                        coord0=coord0, model='GSM2016')
-    #         gdsm.add_frequency(freqs)
-    #     else:
-    #         errh.raise_error(ValueError,
-    #                          "Loading GDSM from image not currently supported")
-    #         if not gdsmfile.exists():
-    #             raise FileNotFoundError("Check path for GDSM image")
-    #         gdsm = classes.DiffuseSkyModel.load_from_fits(gdsmfile)
-    # else:
-    #     gdsm = None
-    #
-    # gdsm_regrid = gdsm.regrid(template=gssm)
+    if cfg["sky_models"]["GSSM"]["include"]:
+        if cfg["sky_models"]["GSSM"]["create"]:
+            errh.raise_error(NotImplementedError,
+                             "Currently can only load GSSM model from image")
+        else:
+            if gssmfile.name == "":
+                gssm = farm.SkyComponent.load_from_fits(
+                    farm.DATA_FILES['MHD'], 'GSSM', fov_deg / 512, coord0
+                )
+                if(len(freqs) != len(gssm.frequencies) or
+                   not all(np.isclose(freqs, gssm.frequencies, atol=1.))):
+                    raise ValueError("Loading GSSM from MHD model requires "
+                                     "fixed frequencies to that model. "
+                                     "Configuration frequencies differ from "
+                                     "MHD model's")
+                gssm.rotate(angle=ast.angle_to_galactic_plane(coord0),
+                            inplace=True)
+            elif not gssmfile.exists():
+                errh.raise_error(FileNotFoundError,
+                                 f"{str(gssmfile)} does not exists")
+            else:
+                gssm = farm.SkyComponent.load_from_fits(gssmfile, 'GSSM')
+            gssm = gssm.regrid(gdsm)
+            gssm.normalise(gdsm, inplace=True)
+        components.append(gssm)
+    else:
+        gssm = None
 # ############################################################################ #
 # ###################### Calculate station beams with OSKAR ################## #
 # ############################################################################ #
@@ -166,6 +177,8 @@ if __name__ == '__main__':
 # ############################################################################ #
 # ############################################################################ #
 # ############################################################################ #
+    sky_model += components
+    sky_model.write_fits(pathlib.Path('test_1.fits'), unit='K')
     # p_k_field, bins_field = pbox.get_power(imdata_gssm[0], (0.002, 0.002,))
     #
     # plt.close('all')

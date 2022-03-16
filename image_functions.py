@@ -42,7 +42,7 @@ def unwrap_angle(angle: float) -> float:
 
 
 def rotate_image(image_data: np.ndarray, phi: float,
-                 x_axis: int = 1, y_axis: int = 2) -> np.ndarray:
+                 x_axis: int = 2, y_axis: int = 1) -> np.ndarray:
     """
     Rotate an image by a defined angle. First rotates by integer multiples of 90
     to bring remaining rotation in the range -45deg <= phi <= 45 deg, then uses
@@ -54,7 +54,7 @@ def rotate_image(image_data: np.ndarray, phi: float,
     image_data
         Array of image data
     phi
-        Angle with which to rotate image counter-clockwise [radians]
+        Angle with which to rotate image clockwise [radians]
     x_axis
         Axis within numpy array representing image x-axis (i.e. right ascension)
     y_axis

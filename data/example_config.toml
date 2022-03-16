@@ -15,18 +15,18 @@ root_name = "OTST11"  # root name for all output files (not directory)
   t_scan = 60  # Duration of each 'scan' of target field, s
 
   [observation.field]
-    ra0 = "00:00:00.0"  # HH:MM:SS.S
-    dec0 = "-30:00:00.00"  # DD:MM:SS.SS
+    ra0 = "01:02:03.4"  # HH:MM:SS.S
+    dec0 = "05:06:07.89"  # DD:MM:SS.SS
     frame = "fk5"  # Astropy-compatible frame string
-    nxpix = 1024
-    nypix = 1024
+    nxpix = 512
+    nypix = 512
     fov = 8.0  # deg
     cdelt = 30.0  # arcsec
 
   [observation.correlator]
-    freq_min = 116e6  # Hz
-    freq_max = 136e6  # Hz
-    nchan = 3  # Number of evenly spaced channels across whole bandwidth, int
+    freq_min = 115e6  # Hz
+    freq_max = 169e6  # Hz
+    nchan = 11  # Number of evenly spaced channels across whole bandwidth, int
     chanwidth = 1e4  # channel bandwidth for smearing calculation, Hz
     t_int = 10.0  # visibility integration time, s
 
@@ -58,7 +58,7 @@ root_name = "OTST11"  # root name for all output files (not directory)
   [sky_models.GSSM]
     include = true
     create = false
-    image = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels/GSSM/Gsynch_SKAs.fits"
+    image = ""
 
   [sky_models.PS]
     include = false
