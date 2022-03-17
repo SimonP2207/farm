@@ -8,8 +8,8 @@ from typing import Union, TextIO
 
 from astropy.time import Time
 
-import error_handling as errh
-import farm.software.common as sfuncs
+from . import common as sfuncs
+from ..miscellaneous import error_handling as errh
 
 
 if sfuncs.which('oskar') is None:

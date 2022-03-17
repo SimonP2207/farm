@@ -9,9 +9,9 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-import farm.loader as loader
+import farm.data.loader as loader
 import farm.astronomy as ast
-import farm.error_handling as errh
+import miscellaneous.error_handling as errh
 import farm.tb_functions as tb_funcs
 from farm.software.oskar import set_oskar_sim_beam_pattern
 from farm.software.oskar import run_oskar_sim_beam_pattern
@@ -27,7 +27,7 @@ if __name__ == '__main__':
         config_file = pathlib.Path(args.config_file)
 
     else:
-        config_file = pathlib.Path(farm.DATA_FILES['EXAMPLE_CONFIG'])
+        config_file = pathlib.Path(farm.data.DATA_FILES['EXAMPLE_CONFIG'])
 # ############################################################################ #
 # ###################### PARSE CONFIGURATION ################################# #
 # ############################################################################ #
@@ -81,7 +81,7 @@ if __name__ == '__main__':
     # Define OSKAR specific names
     sbeam_ini = output_dir.joinpath(f'{out_root}.ini')
     sbeam_name = output_dir.joinpath(f'{out_root}_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I')
-    sbeam_fname = sbeam_name.parent / (f'{sbeam_name.name}.fits')
+    sbeam_fname = sbeam_name.parent / f'{sbeam_name.name}.fits'
 # ############################################################################ #
 # ######################## SET UP THE LOGGER ################################# #
 # ############################################################################ #
@@ -96,7 +96,6 @@ if __name__ == '__main__':
 # ############################################################################ #
 # ###################### CONFIGURATION LOGIC ################################# #
 # ############################################################################ #
-    coord0 = SkyCoord(ra0, dec0, unit=(u.hourangle, u.degree), frame=frame)
     cdelt = fov_deg / nx
     freqs = np.linspace(freq_min, freq_max, nchan)
     freq_inc = freqs[1] - freqs[0]
@@ -106,6 +105,7 @@ if __name__ == '__main__':
 # ############################################################################ #
 # ####################### Large-scale foreground model ####################### #
 # ############################################################################ #
+    gdsm = None
     if cfg["sky_models"]["GDSM"]["include"]:
         if cfg["sky_models"]["GDSM"]["create"]:
             gdsm = farm.SkyComponent('GDSM', (nx, ny), cdelt=cdelt,
@@ -119,11 +119,10 @@ if __name__ == '__main__':
                 raise FileNotFoundError("Check path for GDSM image")
             gdsm = farm.SkyComponent.load_from_fits(gdsmfile, 'GDSM')
         components.append(gdsm)
-    else:
-        gdsm = None
 # ############################################################################ #
 # ##################### Small-scale foreground model ######################### #
 # ############################################################################ #
+    gssm = None
     if cfg["sky_models"]["GSSM"]["include"]:
         if cfg["sky_models"]["GSSM"]["create"]:
             errh.raise_error(NotImplementedError,
@@ -131,7 +130,7 @@ if __name__ == '__main__':
         else:
             if gssmfile.name == "":
                 gssm = farm.SkyComponent.load_from_fits(
-                    farm.DATA_FILES['MHD'], 'GSSM', fov_deg / 512, coord0
+                    farm.data.DATA_FILES['MHD'], 'GSSM', fov_deg / 512, coord0
                 )
                 if(len(freqs) != len(gssm.frequencies) or
                    not all(np.isclose(freqs, gssm.frequencies, atol=1.))):
@@ -149,8 +148,6 @@ if __name__ == '__main__':
             gssm = gssm.regrid(gdsm)
             gssm.normalise(gdsm, inplace=True)
         components.append(gssm)
-    else:
-        gssm = None
 # ############################################################################ #
 # ###################### Calculate station beams with OSKAR ################## #
 # ############################################################################ #
@@ -178,7 +175,9 @@ if __name__ == '__main__':
 # ############################################################################ #
 # ############################################################################ #
     sky_model += components
-    sky_model.write_fits(pathlib.Path('test_1.fits'), unit='K')
+    gdsm.write_fits(pathlib.Path('test_gdsm.fits'), unit='K')
+    gssm.write_fits(pathlib.Path('test_gssm.fits'), unit='K')
+    sky_model.write_fits(pathlib.Path('test_skymodel.fits'), unit='K')
     # p_k_field, bins_field = pbox.get_power(imdata_gssm[0], (0.002, 0.002,))
     #
     # plt.close('all')

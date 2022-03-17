@@ -6,9 +6,8 @@ import shutil
 import pathlib
 import tempfile
 import math
-import random
 from abc import ABC, abstractmethod
-from typing import Tuple, List, Union, TypeVar, Callable, Protocol
+from typing import Tuple, List, Union, TypeVar
 
 import numpy.typing as npt
 import numpy as np
@@ -16,24 +15,16 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.io.fits import Header
-from reproject import reproject_from_healpix
-from pygdsm import GlobalSkyModel2016
 
-from farm import LOGGER, DATA_FILES
-from . import decorators
-from . import error_handling as errh
+from miscellaneous import decorators, error_handling as errh
+from farm import LOGGER
 from . import astronomy as ast
-from . import tb_functions as tb_func
+from . import miscellaneous as misc
+from . import tb_functions as tbfs
 from .software import miriad
 
-
 # Typing related code
-SkyModelType = TypeVar('SkyModelType', bound='_BaseSkyClass')
-
-
-class TbFunction(Protocol):
-    def __call__(self, sky_component: 'TestSkyComponent',
-                 freq: Union[float, npt.NDArray[np.float32]]) -> np.ndarray: ...
+SkyClassType = TypeVar('SkyClassType', bound='_BaseSkyClass')
 
 
 # Miscellaneous functions
@@ -49,17 +40,6 @@ def fits_bunit(fitsfile: pathlib.Path) -> str:
         return header["BUNIT"].strip().upper()
     else:
         return None
-        # # If average value is above T_CMB, assume it must be T_B
-        # if np.nanmean(image_data) > 2.:
-        #     return 'K'
-        #
-        # # Otherwise, it must be a flux or intensity
-        # # Assume if there is beam information, then it is Jy/beam
-        # if 'BMAJ' in header:
-        #     return 'JY/BEAM'
-        #
-        # # Otherwise assume Jy/pixel
-        # return 'JY/PIXEL'
 
 
 def fits_equinox(fitsfile: pathlib.Path) -> float:
@@ -96,43 +76,7 @@ def fits_hdr_frequencies(header: Header) -> np.ndarray:
     return np.linspace(freq_min, freq_max, header["NAXIS3"])
 
 
-def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
-    """
-    For generating sequence of random characters for e.g. file naming
-
-    Parameters
-    ----------
-    length
-        Number of characters to generate
-    choices
-        Characters to choose from. Can be 'alphanumeric', 'alpha', or 'numeric.
-        Default is 'alphanumeric
-    Returns
-    -------
-    string of defined length comprised of random characters from desired
-    character range
-
-    Raises
-    ------
-    ValueError
-        If 'choices' not one of 'alphanumeric', 'alpha' or 'numeric'
-    """
-    if choices not in ('alphanumeric', 'alpha', 'numeric'):
-        raise ValueError("choices must be one of 'alphanumeric', 'alpha', or "
-                         f"'numeric', not {choices}")
-    poss_chars = ''
-    if 'alpha' in choices:
-        poss_chars += ''.join([chr(_) for _ in range(65, 91)])
-        poss_chars += ''.join([chr(_) for _ in range(97, 123)])
-    if 'numeric' in choices:
-        poss_chars += ''.join([chr(_) for _ in range(49, 58)])
-
-    assert poss_chars, "Not sure how poss_chars is an empty string..."
-
-    return ''.join([random.choice(poss_chars) for _ in range(length)])
-
-
-def hdr2d_from_skymodel(sky_class: SkyModelType) -> Header:
+def hdr2d_from_skymodel(sky_class: SkyClassType) -> Header:
     hdr_dict = {
         'BITPIX': -32,  # Assuming all pixel values in range -3.4E38 to +3.4E38
         'NAXIS': 2,
@@ -164,7 +108,7 @@ def hdr2d_from_skymodel(sky_class: SkyModelType) -> Header:
     return hdr
 
 
-def hdr3d_from_skyclass(sky_class: SkyModelType) -> Header:
+def hdr3d_from_skyclass(sky_class: SkyClassType) -> Header:
     if len(sky_class.frequencies) == 0:
         raise ValueError("Can't create Header from SkyClass with no frequency "
                          "information")
@@ -236,9 +180,18 @@ class _BaseSkyClass(ABC):
         ----------
         fitsfile
             Full path to .fits file
+        cdelt
+            Pixel size [deg]. By default this is parsed from the .fits header.
+            Note that specifying a value artifically changes pixel size i.e.
+            fluxes (i.e. Jy/pixel) stay the same from the input .fits to the
+            output t_b data
+        coord0
+            Central coordinate (corresponds to the fits-header CRVAL1 and
+            CRVAL2 keywords) as a astropy.coordinates.SkyCoord instance. By
+            default this is parsed from the .fits header
         name
-            Name to assign to the model. If not given, the fits filename
-            (without the file type) will be given by default
+            Name to assign to the output instance. If not given, the fits
+            filename (without the file type) will be given by default
 
         Returns
         -------
@@ -299,7 +252,7 @@ class _BaseSkyClass(ABC):
             name = fitsfile.name.strip('.fits')[0]
 
         sky_model = SkyComponent(name, (nx, ny), cdelt=cdelt,
-                                 coord0=coord0, tb_func=tb_func.fits_t_b)
+                                 coord0=coord0, tb_func=tbfs.fits_t_b)
         sky_model._frequencies = freqs
         sky_model._tb_data = data
 
@@ -529,8 +482,8 @@ class _BaseSkyClass(ABC):
         """
         temp_dir = pathlib.Path(tempfile.gettempdir())
         temp_pfx = temp_dir.joinpath(str(miriad_image.name).replace('.', '_'))
-        temp_fits_file = pathlib.Path(f"{temp_pfx}_"
-                                      f"temp_{generate_random_chars(10)}.fits")
+        temp_identifier = misc.generate_random_chars(10)
+        temp_fits_file = pathlib.Path(f"{temp_pfx}_temp_{temp_identifier}.fits")
 
         if temp_fits_file.exists():
             raise FileExistsError("I don't know how this is possible. There "
@@ -548,7 +501,7 @@ class _BaseSkyClass(ABC):
         miriad.fits(_in=temp_fits_file, out=miriad_image, op='xyin')
         temp_fits_file.unlink()
 
-    def regrid(self, template: SkyModelType) -> SkyModelType:
+    def regrid(self, template: SkyClassType) -> SkyClassType:
         """
         Regrid the SkyClass onto the coordinate grid of another SkyClass. Make
         sure that the SkyClass to be regridded is in the field of view of the
@@ -573,7 +526,7 @@ class _BaseSkyClass(ABC):
                              "Frequency information of sky class instance to be"
                              " regridded does not match that of the template")
 
-        sffx = generate_random_chars(10)
+        sffx = misc.generate_random_chars(10)
         template_mir_image = pathlib.Path(f'temp_template_image_{sffx}.im')
         input_mir_image = pathlib.Path(f'temp_input_image_{sffx}.im')
         out_mir_image = pathlib.Path(f'temp_out_image_{sffx}.im')
@@ -610,7 +563,7 @@ class _BaseSkyClass(ABC):
         return regridded_input_skyclass
 
     def rotate(self, angle: float,
-               inplace: bool=True) -> Union[None, SkyModelType]:
+               inplace: bool = True) -> Union[None, SkyClassType]:
         """
         Rotate the sky brightness distribution by specified angle
 
@@ -659,7 +612,7 @@ class _BaseSkyClass(ABC):
 
         return False
 
-    def possess_similar_header(self, other: SkyModelType) -> bool:
+    def possess_similar_header(self, other: SkyClassType) -> bool:
         """
         Check if matching image sizes, frequencies and cell sizes between this
         and another sky class instance. Acceptable difference in cell sizes is
@@ -697,7 +650,7 @@ class _BaseSkyClass(ABC):
 
         return True
 
-    def same_spectral_setup(self, other: SkyModelType) -> bool:
+    def same_spectral_setup(self, other: SkyClassType) -> bool:
         """
         Check if matching frequencies are present in two sky class instances
 
@@ -721,17 +674,13 @@ class _BaseSkyClass(ABC):
 
 class SkyComponent(_BaseSkyClass):
     def __init__(self, name: str, npix: Tuple[int, int], cdelt: float,
-                 coord0: SkyCoord, tb_func: TbFunction):
+                 coord0: SkyCoord, tb_func: tbfs.TbFunction):
         super().__init__(npix, cdelt, coord0)
         self.name = name
         self._tb_func = tb_func
 
-    @property
-    def model(self):
-        return self._model
-
-    def normalise(self, other: SkyModelType,
-                  inplace: bool = False) -> Union[None, SkyModelType]:
+    def normalise(self, other: SkyClassType,
+                  inplace: bool = False) -> Union[None, SkyClassType]:
         """
         Adjust the SkyComponent instance's brightness data in order to properly
         recover the angular power spectrum of the combined power spectrum of
@@ -763,7 +712,7 @@ class SkyComponent(_BaseSkyClass):
             new_skymodeltype._tb_data *= scalings
             return new_skymodeltype
 
-    def t_b(self, freq: Union[float, npt.NDArray[np.float32]]) -> npt.NDArray[np.float32]:
+    def t_b(self, freq: tbfs.FreqType) -> tbfs.ReturnType:
         return self._tb_func(self, freq)
 
 
@@ -785,14 +734,11 @@ class SkyModel(_BaseSkyClass):
             Frequencies corresponding to the SkyModel instance's desired sky
             brightness distribution cube's spectral axis
         """
-        # Attributes created from constructor args
-        self.n_x, self.n_y = n_pix
-        self.cdelt = cdelt
-        self.coord0 = coord0
-        self._frequencies = frequencies
+        super().__init__(n_pix=n_pix, cdelt=cdelt, coord0=coord0)
 
-        # Private instance attributes
+        self._frequencies = frequencies
         self._tb_data = np.zeros((len(self.frequencies), self.n_y, self.n_x))
+
         self._components = []
 
     def t_b(self, freq: float) -> np.ndarray:

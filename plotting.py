@@ -10,7 +10,7 @@ from matplotlib import cm
 from matplotlib.ticker import MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .classes import SkyModelType
+from .classes import SkyClassType
 from .image_functions import calculate_spix
 
 
@@ -41,7 +41,7 @@ from .image_functions import calculate_spix
 
 
 
-def plot_spix(sky_model_type: SkyModelType, precision: float = 0.1,
+def plot_spix(sky_model_type: SkyClassType, precision: float = 0.1,
               ax: Union[None, matplotlib.axes.Axes] = None,
               cax: Union[None, matplotlib.axes.Axes] = None,
               savefig: Union[str, bool] = False):
@@ -90,7 +90,7 @@ def plot_spix(sky_model_type: SkyModelType, precision: float = 0.1,
         fig.savefig(savefig, dpi=300, bbox_inches='tight')
 
 
-def plot_power_spectrum(sky_model_type: SkyModelType, freq: float,
+def plot_power_spectrum(sky_model_type: SkyClassType, freq: float,
                         ax: Union[None, matplotlib.axes.Axes] = None,
                         savefig: Union[str, bool] = False):
     import powerbox as pbox

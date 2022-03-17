@@ -5,9 +5,9 @@
 /.DS_Store
 *.def
 /*.fits
-data/Gsynch_SKAs_original.fits
-data/gsm2016_components.h5
-data/obs_lightcone_8_512_single_p.fits
+data/files/Gsynch_SKAs_original.fits
+data/files/gsm2016_components.h5
+data/files/obs_lightcone_8_512_single_p.fits
 sky_cuts.py
 testing.py
 sky_modeller.py

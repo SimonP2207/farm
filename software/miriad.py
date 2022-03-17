@@ -9,11 +9,10 @@ import re
 import subprocess
 import sys
 import warnings
-import error_handling as errh
-import farm.software.common as sfuncs
 
-# __all__ = ["mir_commands", "MiriadError", "miriad"]
-__all__ = ["miriad"]
+from . import common as sfuncs
+from ..miscellaneous import error_handling as errh
+
 
 if sfuncs.which('miriad') is None:
     errh.raise_error(ImportError, "miriad is not in your PATH")

@@ -1,3 +1,8 @@
+"""
+Functions designed to allow farm to raise exceptions, issue warnings and log
+either event, expecially in the error case whereby logs are written before the
+exception terminates the program
+"""
 import warnings
 from farm import LOGGER
 

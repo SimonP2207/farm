@@ -7,7 +7,7 @@ import datetime
 import toml
 
 from farm import LOGGER
-import error_handling as errh
+from miscellaneous import error_handling as errh
 
 
 def check_file_exists(filename: pathlib.Path) -> bool:
