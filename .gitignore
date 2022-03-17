@@ -3,7 +3,11 @@
 /.idea/
 /tests/
 /.DS_Store
-sky_cuts.py
 *.def
 /*.fits
+data/Gsynch_SKAs_original.fits
 data/gsm2016_components.h5
+data/obs_lightcone_8_512_single_p.fits
+sky_cuts.py
+testing.py
+sky_modeller.py
