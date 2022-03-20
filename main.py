@@ -13,6 +13,8 @@ import farm.data.loader as loader
 import farm.astronomy as ast
 import miscellaneous.error_handling as errh
 import farm.tb_functions as tb_funcs
+from farm.calibration.noise import sefd_to_rms
+from farm.software import oskar
 from farm.software.oskar import set_oskar_sim_beam_pattern
 from farm.software.oskar import run_oskar_sim_beam_pattern
 from farm import LOGGER
@@ -32,13 +34,15 @@ if __name__ == '__main__':
 # ###################### PARSE CONFIGURATION ################################# #
 # ############################################################################ #
     cfg = loader.load_configuration(config_file)
+    cfg = loader.FarmConfiguration(config_file)
     # Files/directories
-    sm_dir = pathlib.Path(cfg["directories"]["sky_models"])
     tel_dir = pathlib.Path(cfg["directories"]["telescope_model"])
-    output_dir = pathlib.Path(cfg["directories"]["output"])
-    gdsmfile = pathlib.Path(cfg["sky_models"]["GDSM"]["image"])
-    gssmfile = pathlib.Path(cfg["sky_models"]["GSSM"]["image"])
-
+    output_dir = pathlib.Path(cfg["directories"]["output_dcy"])
+    sefd_freq_file = pathlib.Path(cfg["calibration"]["noise"]["sefd_frequencies_file"])
+    sefd_file = pathlib.Path(cfg["calibration"]["noise"]["sefd_file"])
+    gdsm_file = pathlib.Path(cfg["sky_models"]["GDSM"]["image"])
+    gssm_file = pathlib.Path(cfg["sky_models"]["GSSM"]["image"])
+    points_sources_file = pathlib.Path(cfg["sky_models"]["PS"]["image"])
     freq_min = cfg["observation"]["correlator"]["freq_min"]  # [Hz]
     freq_max = cfg["observation"]["correlator"]["freq_max"]  # [Hz]
     nchan = cfg["observation"]["correlator"]["nchan"]  # [Hz]
@@ -48,8 +52,8 @@ if __name__ == '__main__':
                       cfg["observation"]["field"]["dec0"],
                       unit=(u.hourangle, u.degree),
                       frame=cfg["observation"]["field"]["frame"])
-    nx = cfg["sky_models"]["GDSM"]["nx"]  # pixels in diffuse sky model
-    ny = cfg["sky_models"]["GDSM"]["ny"]  # pixels in diffuse sky model
+    nx = cfg["observation"]["field"]["nxpix"]  # pixels in field
+    ny = cfg["observation"]["field"]["nypix"]  # pixels in field
     ra0 = cfg["observation"]["field"]["ra0"]
     dec0 = cfg["observation"]["field"]["dec0"]
     frame = cfg["observation"]["field"]["frame"]
@@ -58,7 +62,7 @@ if __name__ == '__main__':
     cut_sec = cfg["observation"]["t_scan"]  # length of each cut ('scan')
     int_sec = cfg["observation"]["correlator"]["t_int"]  # integration time
     num_cuts = cfg["observation"]["n_scan"]  # number of cuts ('scans')
-
+    noise_seed = cfg["calibration"]['noise']["noise_seed"]
     out_root = cfg['root_name']  # root name for all output files (not directory)
 # ############################################################################ #
 # ########################### DEFINE VARIOUS FILE NAMES ###################### #
@@ -67,20 +71,20 @@ if __name__ == '__main__':
 
     # Define output file names for sky-models, images, and oskar config files
     # GDSM
-    gsm = output_dir.joinpath(f'{out_root}_GSM')
-    gsmx = output_dir.joinpath(f'{out_root}_GSMX')
-    gsmf = output_dir.joinpath(f'{out_root}_GSM.fits')
+    gsm = output_dir.joinpath(f'{cfg.root_name}_GSM')
+    gsmx = output_dir.joinpath(f'{cfg.root_name}_GSMX')
+    gsmf = output_dir.joinpath(f'{cfg.root_name}_GSM.fits')
 
     # GDSM (high resolution)
-    gtd = output_dir.joinpath(f'{out_root}_GTD')
-    gtdf = output_dir.joinpath(f'{out_root}_GTD.fits')
+    gtd = output_dir.joinpath(f'{cfg.root_name}_GTD')
+    gtdf = output_dir.joinpath(f'{cfg.root_name}_GTD.fits')
 
     # Compact sky model (T-RECS)
-    cmpt = output_dir.joinpath(f'{out_root}_CMPT')
+    cmpt = output_dir.joinpath(f'{cfg.root_name}_CMPT')
 
     # Define OSKAR specific names
-    sbeam_ini = output_dir.joinpath(f'{out_root}.ini')
-    sbeam_name = output_dir.joinpath(f'{out_root}_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I')
+    sbeam_ini = output_dir.joinpath(f'{cfg.root_name}.ini')
+    sbeam_name = output_dir.joinpath(f'{cfg.root_name}_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I')
     sbeam_fname = sbeam_name.parent / f'{sbeam_name.name}.fits'
 # ############################################################################ #
 # ######################## SET UP THE LOGGER ################################# #
@@ -100,7 +104,16 @@ if __name__ == '__main__':
     freqs = np.linspace(freq_min, freq_max, nchan)
     freq_inc = freqs[1] - freqs[0]
     start_utc = ast.get_start_time(coord0.ra.deg, length_sec)
-    sky_model = farm.SkyModel((nx, ny), cdelt, coord0, freqs)
+    num_int_per_scan = cut_sec / int_sec
+
+    # Calculate and save image rms levels from SEFDs
+    rms_file = output_dir / "rms_noise_file.txt"
+    t_total = cut_sec * num_cuts
+    n_ants = len(np.loadtxt(tel_dir / 'layout.txt'))
+    im_rms = sefd_to_rms(np.loadtxt(sefd_file), n_ants, t_total, chan_inc)
+    np.savetxt(rms_file, im_rms)
+
+    sky_model = farm.sky_model.SkyModel((nx, ny), cdelt, coord0, freqs)
     components = []
 # ############################################################################ #
 # ####################### Large-scale foreground model ####################### #
@@ -108,16 +121,16 @@ if __name__ == '__main__':
     gdsm = None
     if cfg["sky_models"]["GDSM"]["include"]:
         if cfg["sky_models"]["GDSM"]["create"]:
-            gdsm = farm.SkyComponent('GDSM', (nx, ny), cdelt=cdelt,
+            gdsm = farm.sky_model.SkyComponent('GDSM', (nx, ny), cdelt=cdelt,
                                      coord0=coord0,
                                      tb_func=tb_funcs.gdsm2016_t_b)
             gdsm.add_frequency(freqs)
         else:
             errh.raise_error(ValueError,
                              "Loading GDSM from image not currently supported")
-            if not gdsmfile.exists():
+            if not gdsm_file.exists():
                 raise FileNotFoundError("Check path for GDSM image")
-            gdsm = farm.SkyComponent.load_from_fits(gdsmfile, 'GDSM')
+            gdsm = farm.sky_model.SkyComponent.load_from_fits(gdsm_file, 'GDSM')
         components.append(gdsm)
 # ############################################################################ #
 # ##################### Small-scale foreground model ######################### #
@@ -126,51 +139,141 @@ if __name__ == '__main__':
     if cfg["sky_models"]["GSSM"]["include"]:
         if cfg["sky_models"]["GSSM"]["create"]:
             errh.raise_error(NotImplementedError,
-                             "Currently can only load GSSM model from image")
+                             "Currently can only load GSSM model from fits")
         else:
-            if gssmfile.name == "":
-                gssm = farm.SkyComponent.load_from_fits(
+            if gssm_file.name == "":
+                gssm = farm.sky_model.SkyComponent.load_from_fits(
                     farm.data.DATA_FILES['MHD'], 'GSSM', fov_deg / 512, coord0
                 )
                 if(len(freqs) != len(gssm.frequencies) or
                    not all(np.isclose(freqs, gssm.frequencies, atol=1.))):
-                    raise ValueError("Loading GSSM from MHD model requires "
-                                     "fixed frequencies to that model. "
-                                     "Configuration frequencies differ from "
-                                     "MHD model's")
+                    raise ValueError("GSSM .fits cube frequencies differ from"
+                                     "those requested")
                 gssm.rotate(angle=ast.angle_to_galactic_plane(coord0),
                             inplace=True)
-            elif not gssmfile.exists():
+            elif not gssm_file.exists():
                 errh.raise_error(FileNotFoundError,
-                                 f"{str(gssmfile)} does not exists")
+                                 f"{str(gssm_file)} does not exist")
             else:
-                gssm = farm.SkyComponent.load_from_fits(gssmfile, 'GSSM')
+                gssm = farm.sky_model.SkyComponent.load_from_fits(gssm_file, 'GSSM')
             gssm = gssm.regrid(gdsm)
             gssm.normalise(gdsm, inplace=True)
         components.append(gssm)
+# ############################################################################ #
+# ######################## TRECS foreground model ############################ #
+# ############################################################################ #
+    point_sources = None
+    if cfg["sky_models"]["PS"]["include"]:
+        if cfg["sky_models"]["PS"]["create"]:
+            errh.raise_error(NotImplementedError,
+                             "Currently can only load TRECS model from fits")
+        else:
+            if points_sources_file.name == "":
+                ps = farm.sky_model.SkyComponent.load_from_fits(
+                    farm.data.DATA_FILES['PS'], 'PS', fov_deg / 512, coord0
+                )
+                if(len(freqs) != len(ps.frequencies) or
+                   not all(np.isclose(freqs, ps.frequencies, atol=1.))):
+                    raise ValueError("Point sources .fits cube frequencies "
+                                     "differ from those requested")
+            elif not points_sources_file.exists():
+                errh.raise_error(FileNotFoundError,
+                                 f"{str(points_sources_file)} does not exist")
+            else:
+                point_sources = farm.sky_model.SkyComponent.load_from_fits(
+                    points_sources_file, 'PS'
+                )
+            point_sources = point_sources.regrid(gdsm)
+        components.append(point_sources)
+# ############################################################################ #
+# ############################ A-Team sources ################################ #
+# ############################################################################ #
+    if cfg.sky_model.ateam:
+        if cfg.sky_model.ateam.create:
+            sky0 = oskar.Sky()
+            sky1 = oskar.Sky()
+            sky_bright = oskar.Sky.from_array(farm.data.ATEAM_DATA)
+            sky_bright_att = oskar.Sky.from_array(farm.data.ATEAM_DATA)
+            sky0.append(sky_bright)
+            sky1.append(sky_bright_att)
+        else:
+            raise(ValueError, "A-Team loading from file not yet supported")
 # ############################################################################ #
 # ###################### Calculate station beams with OSKAR ################## #
 # ############################################################################ #
     with open(sbeam_ini, 'wt') as f:
         set_oskar_sim_beam_pattern(f, "simulator/double_precision", False)
         set_oskar_sim_beam_pattern(f, "observation/phase_centre_ra_deg",
-                                   coord0.ra.deg)
+                                   cfg.field.coord0.ra.deg)
         set_oskar_sim_beam_pattern(f, "observation/phase_centre_dec_deg",
-                                   coord0.dec.deg)
-        set_oskar_sim_beam_pattern(f, "observation/start_frequency_hz", freq_min)
-        set_oskar_sim_beam_pattern(f, "observation/num_channels", nchan)
-        set_oskar_sim_beam_pattern(f, "observation/frequency_inc_hz", freq_inc)
+                                   cfg.field.coord0.dec.deg)
+        set_oskar_sim_beam_pattern(f, "observation/start_frequency_hz",
+                                   cfg.correlator.freq_min)
+        set_oskar_sim_beam_pattern(f, "observation/num_channels",
+                                   cfg.correlator.n_chan)
+        set_oskar_sim_beam_pattern(f, "observation/frequency_inc_hz",
+                                   cfg.correlator.freq_inc)
         set_oskar_sim_beam_pattern(f, "observation/start_time_utc",
-                                   ast.get_start_time(coord0.ra.deg, length_sec))
-        set_oskar_sim_beam_pattern(f, "observation/length", length_sec)
-        set_oskar_sim_beam_pattern(f, "observation/num_time_steps", num_cuts)
-        set_oskar_sim_beam_pattern(f, "telescope/input_directory", tel_dir)
-        set_oskar_sim_beam_pattern(f, "telescope/pol_mode", "Scalar")
-        set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/fov_deg", fov_deg)
-        set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size", nx)
-        set_oskar_sim_beam_pattern(f, "beam_pattern/root_path", out_root)
-        set_oskar_sim_beam_pattern(f, "beam_pattern/station_outputs/fits_image/auto_power", True)
+                                   ast.get_start_time(cfg.field.coord0.ra.deg,
+                                                      cfg.observation.duration))
+        set_oskar_sim_beam_pattern(f, "observation/length",
+                                   cfg.observation.duration)
+        set_oskar_sim_beam_pattern(f, "observation/num_time_steps",
+                                   cfg.observation.n_scan)
+        set_oskar_sim_beam_pattern(f, "telescope/input_directory",
+                                   cfg.telescope_model)
+        set_oskar_sim_beam_pattern(f, "telescope/pol_mode",
+                                   "Scalar")
+        set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/fov_deg",
+                                   cfg.field.fov[0])
+        set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size",
+                                   cfg.field.nx)
+        set_oskar_sim_beam_pattern(f, "beam_pattern/root_path",
+                                   cfg.root_name)
+        set_oskar_sim_beam_pattern(f, "beam_pattern/station_outputs/fits_image/auto_power",
+                                   True)
     run_oskar_sim_beam_pattern(sbeam_ini)
+# ############################################################################ #
+# #################### Calculate telescope model with OSKAR ################## #
+# ############################################################################ #
+    tscp_settings = oskar.SettingsTree('oskar_sim_interferometer')
+
+    tscp_settings.set_value('simulator/double_precision', 'TRUE')
+    tscp_settings.set_value('simulator/use_gpus', 'FALSE')
+    tscp_settings.set_value('simulator/max_sources_per_chunk', '4096')
+
+    tscp_settings.set_value('observation/phase_centre_ra_deg',
+                            cfg.field.coord0.ra.deg)
+    tscp_settings.set_value('observation/phase_centre_dec_deg',
+                            cfg.field.coord0.dec.deg)
+    tscp_settings.set_value('observation/start_frequency_hz',
+                            cfg.correlator.freq_min)
+    tscp_settings.set_value('observation/num_channels',
+                            cfg.correlator.n_chan)
+    tscp_settings.set_value('observation/frequency_inc_hz',
+                            cfg.correlator.freq_inc)
+    tscp_settings.set_value('observation/length',
+                            cfg.observation.t_scan)
+    tscp_settings.set_value('observation/num_time_steps',
+                            cfg.observation.t_scan // cfg.correlator.t_int)
+
+    tscp_settings.set_value('telescope/input_directory', tel_dir)
+    tscp_settings.set_value('telescope/allow_station_beam_duplication', 'TRUE')
+    tscp_settings.set_value('telescope/pol_mode', 'Scalar')
+    # Add in ionospheric screen model
+    tscp_settings.set_value('telescope/ionosphere_screen_type', 'External')
+
+    tscp_settings.set_value('interferometer/channel_bandwidth_hz', cfg.correlator.chan_width)
+    tscp_settings.set_value('interferometer/time_average_sec', cfg.correlator.t_int)
+    tscp_settings.set_value('interferometer/ignore_w_components', 'FALSE')
+
+    # Add in Telescope noise model via files where rms has been tuned
+    tscp_settings.set_value('interferometer/noise/enable', cfg.calibration.noise)
+    tscp_settings.set_value('interferometer/noise/seed', cfg.calibration.noise_seed)
+    tscp_settings.set_value('interferometer/noise/freq', 'Data')
+    tscp_settings.set_value('interferometer/noise/freq/file', cfg.calibration.sefd_freq_file)
+    tscp_settings.set_value('interferometer/noise/rms', 'Data')
+    tscp_settings.set_value('interferometer/noise/rms/file', cfg.calibration.sefd_rms_file)
 # ############################################################################ #
 # ############################################################################ #
 # ############################################################################ #

@@ -9,11 +9,12 @@ from astropy.io.fits import Header
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time, TimeDelta
-from powerbox.tools import get_power
 
 
 def power_spectrum(header: Header, data: np.ndarray,
                    sum_freq: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+    from powerbox.tools import get_power
+
     dims_deg = (header["NAXIS1"] * np.abs(header["CDELT1"]),
                 header["NAXIS2"] * header["CDELT2"])
 
@@ -252,26 +253,6 @@ def get_dt_days(ra0_deg):
     return dt_days
 
 
-def ateam_sources():
-    """Loads and returns a list of bright A-team sources."""
-    from farm import DATA_FILES
-
-    data = []
-    with open(DATA_FILES['ATEAM'], 'rt') as f:
-        for line in f.readlines():
-            line = line.strip()
-            if line[0] == '#':
-                continue
-            try:
-                line = line[:line.index('#')]
-            except ValueError:
-                pass
-            line = [float(_.strip()) for _ in line.split(',')]
-            data.append(line)
-
-    return np.asarray(data)
-
-
 def angle_to_galactic_plane(coord: SkyCoord) -> float:
     skypos1 = SkyCoord(ra=coord.ra, dec=(coord.dec.deg + 0.5) * u.degree)
 
@@ -279,7 +260,3 @@ def angle_to_galactic_plane(coord: SkyCoord) -> float:
     l1, b1 = skypos1.galactic.l.degree, skypos1.galactic.b.degree
 
     return np.arctan2((l1 - l0), (b1 - b0))
-
-
-if __name__ == '__main__':
-    d = ateam_sources()

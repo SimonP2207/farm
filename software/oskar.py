@@ -7,6 +7,7 @@ import pathlib
 from typing import Union, TextIO
 
 from astropy.time import Time
+from oskar import *
 
 from . import common as sfuncs
 from ..miscellaneous import error_handling as errh

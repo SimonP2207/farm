@@ -1,37 +1,37 @@
-root_name = "OTST11"  # root name for all output files (not directory)
-
 [directories]
-  base = "/Users/simon.purser/pylib/farm/testrun"
-  sky_models = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels"
-  telescope_models = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels"
+  root_name = "example_1"  # root name for all output files (not directory)
   telescope_model = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/V512/telescope.tm"
-  output = "/Users/simon.purser/Desktop/test_output_farm"
+  output_dcy = "/Users/simon.purser/Desktop/test_output_farm"
 
 # observation not yet incorporated in to FARM
 [observation]
   time = 2027-01-01T12:00:01
-  duration = 14400  # s
+  duration = 14400  # total time scans are spaced over
   n_scan = 5  # Number of observational 'scans' of target field
   t_scan = 60  # Duration of each 'scan' of target field, s
 
   [observation.field]
     ra0 = "01:02:03.4"  # HH:MM:SS.S
     dec0 = "05:06:07.89"  # DD:MM:SS.SS
-    frame = "fk5"  # Astropy-compatible frame string
-    nxpix = 512
-    nypix = 512
-    fov = 8.0  # deg
+    frame = "fk5"  # Astropy-compatible frame string e.g. fk4, fk5, galactic etc
+    nxpix = 512  # Number of pixels in x/right ascension
+    nypix = 512  # Number of pixels in y/declination
     cdelt = 30.0  # arcsec
 
   [observation.correlator]
     freq_min = 115e6  # Hz
     freq_max = 169e6  # Hz
     nchan = 11  # Number of evenly spaced channels across whole bandwidth, int
-    chanwidth = 1e4  # channel bandwidth for smearing calculation, Hz
+    chanwidth = 250e3  # channel bandwidth for smearing calculation, Hz
     t_int = 10.0  # visibility integration time, s
 
 # calibration not yet incorporated in to FARM
 [calibration]
+  [calibration.noise]
+    include = true
+    seed = 12345  # Random number seed for thermal noise calculation
+    sefd_frequencies_file = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/noise_frequencies.txt"
+    sefd_file = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/noise_sefds.txt"
   [calibration.TEC]
     include = false
   [calibration.gains]
@@ -47,13 +47,13 @@ root_name = "OTST11"  # root name for all output files (not directory)
 
   [sky_models.A-Team]
     include = false
+    create = true
+    image = ""
 
   [sky_models.GDSM]
     include = true
     create = true
-    nx = 1024  # x-pixels in diffuse sky model
-    ny = 1024  # y-pixels in diffuse sky model
-    image = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/SkyModels/GDSM/gsm_2016_cube.fits"
+    image = ""
 
   [sky_models.GSSM]
     include = true
@@ -63,5 +63,5 @@ root_name = "OTST11"  # root name for all output files (not directory)
   [sky_models.PS]
     include = false
     create = false
-    flux_cutoff = 10000.0  # flux cutoff beyond radius of fov_deg, Jy
     image = ""
+    flux_cutoff = 10000.0  # flux cutoff beyond radius of fov_deg, Jy

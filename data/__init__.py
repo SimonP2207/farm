@@ -1,4 +1,4 @@
-import warnings
+import numpy as np
 from pathlib import Path
 from . import loader
 
@@ -19,3 +19,5 @@ for identifier, data_file in DATA_FILES.items():
 #         warnings.warn(f"{str(file)} not listed in farm.data.DATA_FILES",
 #                       Warning)
 # del excluded_files
+
+ATEAM_DATA = np.loadtxt(DATA_FILES['ATEAM'], delimiter=',')

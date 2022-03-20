@@ -10,7 +10,7 @@ from matplotlib import cm
 from matplotlib.ticker import MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .classes import SkyClassType
+from sky_model.classes import SkyClassType
 from .image_functions import calculate_spix
 
 

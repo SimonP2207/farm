@@ -2,7 +2,7 @@
 All methods/classes related to image handling
 """
 import numpy as np
-from .classes import SkyClassType
+from sky_model.classes import SkyClassType
 
 
 def calculate_spix(sky_model_type: SkyClassType) -> np.ndarray:

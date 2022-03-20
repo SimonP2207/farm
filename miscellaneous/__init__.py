@@ -2,6 +2,7 @@
 farm.miscellaneous subpackage contains methods not logically belonging to the
 other farm subpackages, or not suited to placement in farm's main directory
 """
+import pathlib
 from . import decorators
 from . import error_handling
 
@@ -42,3 +43,4 @@ def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
     assert poss_chars, "Not sure how poss_chars is an empty string..."
 
     return ''.join([random.choice(poss_chars) for _ in range(length)])
+

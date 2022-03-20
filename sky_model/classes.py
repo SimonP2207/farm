@@ -18,10 +18,10 @@ from astropy.io.fits import Header
 
 from miscellaneous import decorators, error_handling as errh
 from farm import LOGGER
-from . import astronomy as ast
-from . import miscellaneous as misc
-from . import tb_functions as tbfs
-from .software import miriad
+from farm import astronomy as ast
+from farm import miscellaneous as misc
+from farm import tb_functions as tbfs
+from farm.software import miriad
 
 # Typing related code
 SkyClassType = TypeVar('SkyClassType', bound='_BaseSkyClass')
@@ -581,7 +581,7 @@ class _BaseSkyClass(ABC):
         -------
         None if inplace=True, or SkyComponent instance if inplace=False
         """
-        from .image_functions import rotate_image
+        from ..image_functions import rotate_image
         rotated_data = rotate_image(self._tb_data, angle, x_axis=2, y_axis=1)
 
         if inplace:

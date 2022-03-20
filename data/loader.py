@@ -1,26 +1,57 @@
 """
 All methods related to the loading of FARM configuration files
 """
-import typing
-import pathlib
 import datetime
+import random
+from pathlib import Path
+from typing import Union
+
+import numpy as np
+import numpy.typing as npt
 import toml
+from dataclasses import dataclass
+
+import astropy.units as u
+from astropy.coordinates import SkyCoord
 
 from farm import LOGGER
 from miscellaneous import error_handling as errh
 
 
-def check_file_exists(filename: pathlib.Path) -> bool:
+def check_file_exists(filename: Path) -> bool:
     if not filename.exists():
         return False
     return True
 
 
 def check_config_validity(config_dict: dict):
-    """Check .toml configuration file has all required parameters"""
-    structure = (('directories', 'base', str),
-                 ('directories', 'sky_models', str),
-                 ('directories', 'telescope_models', str),
+    """
+    Check a dict loaded from a .toml configuration file has all required
+    parameters
+
+    Parameters
+    ----------
+    config_dict
+        Python dict containing all required configuration parameters
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    KeyError
+        If the configuration dict doesn't contain one or more required
+        parameters
+    TypeError
+        If any setting value's type is incorrect
+    FileNotFoundError
+        If any images specified in the sky_models configuration section do not
+        exist
+    """
+    structure = (('directories', 'root_name', str),
+                 ('directories', 'telescope_model', str),
+                 ('directories', 'output_dcy', str),
                  ('observation', 'time', datetime.datetime),
                  ('observation', 'field', 'ra0', str),
                  ('observation', 'field', 'dec0', str),
@@ -32,10 +63,17 @@ def check_config_validity(config_dict: dict):
                  ('observation', 'correlator', 'freq_max', float),
                  ('observation', 'correlator', 'nchan', int),
                  ('observation', 'correlator', 'chanwidth', float),
+                 ('calibration', 'noise', 'include', bool),
+                 ('calibration', 'noise', 'seed', int),
+                 ('calibration', 'noise', 'sefd_frequencies_file', str),
+                 ('calibration', 'noise', 'sefd_file', str),
+                 ('calibration', 'TEC', 'include', bool),
                  ('sky_models', '21cm', 'include', bool),
                  ('sky_models', '21cm', 'create', bool),
                  ('sky_models', '21cm', 'image', str),
                  ('sky_models', 'A-Team', 'include', bool),
+                 ('sky_models', 'A-Team', 'create', bool),
+                 ('sky_models', 'A-Team', 'image', str),
                  ('sky_models', 'GDSM', 'include', bool),
                  ('sky_models', 'GDSM', 'create', bool),
                  ('sky_models', 'GDSM', 'image', str),
@@ -68,17 +106,16 @@ def check_config_validity(config_dict: dict):
             #                      "specify a valid path for image")
 
             if not config_dict["sky_models"][sky_model]["create"]:
-                im = pathlib.Path(config_dict["sky_models"][sky_model]["image"])
+                im = Path(config_dict["sky_models"][sky_model]["image"])
                 if not im.exists():
                     err_msg = f"Using existing file, {im.__str__()}, as " \
                               f"{sky_model} sky model, but it doesn't exist"
-                    errh.raise_error(FileNotFoundError,
-                                     err_msg)
+                    errh.raise_error(FileNotFoundError, err_msg)
 
 
-def load_configuration(toml_file: typing.Union[pathlib.Path, str]) -> dict:
-    if not isinstance(toml_file, pathlib.Path):
-        toml_file = pathlib.Path(toml_file)
+def load_configuration(toml_file: Union[Path, str]) -> dict:
+    if not isinstance(toml_file, Path):
+        toml_file = Path(toml_file)
 
     if not check_file_exists(toml_file):
         errh.raise_error(FileNotFoundError,
@@ -90,3 +127,210 @@ def load_configuration(toml_file: typing.Union[pathlib.Path, str]) -> dict:
     LOGGER.debug(f"{str(toml_file.resolve())} configuration is valid")
 
     return config_dict
+
+
+@dataclass
+class Observation:
+    time: datetime.datetime  # start time of observation
+    duration: float  # s
+    n_scan: int  #
+    t_scan: float  # s
+
+    @property
+    def t_total(self):
+        return self.n_scan * self.t_scan
+
+@dataclass
+class Field:
+    _ra0: str
+    _dec0: str
+    _frame: str
+    nx: int
+    ny: int
+    cdelt: float  # arcsec
+
+    @property
+    def coord0(self):
+        return SkyCoord(self._ra0, self._dec0, frame=self._frame,
+                        unit=(u.hourangle, u.deg))
+
+    @property
+    def cdelt_deg(self):
+        return self.cdelt / 3600.
+
+    @property
+    def fov(self):
+        return self.nx * self.cdelt_deg, self.ny * self.cdelt_deg
+
+    @property
+    def area(self):
+        return np.prod(self.fov)
+
+
+@dataclass
+class Correlator:
+    freq_min: float  # minimum frequency [Hz]
+    freq_max: float  # maximum frequency [Hz]
+    n_chan: int  # number of evenly spaced channels from freq_min to freq_max
+    chan_width: float  # channel width [Hz]
+    t_int: float  # visibility integration time
+
+    @property
+    def frequencies(self):
+        return np.linspace(self.freq_min, self.freq_max, self.n_chan)
+
+    @property
+    def freq_inc(self):
+        return self.frequencies[1] - self.frequencies[0]
+
+
+@dataclass
+class Calibration:
+    noise: bool
+    tec: bool
+    gains: bool
+    dd_effects: bool
+    noise_seed: int = random.randint(1, 1e6)
+    sefd_freq_file: Union[str, Path] = ""
+    sefd_file: Union[str, Path] = ""
+
+    def __post_init__(self):
+        self.sefd_freq_file = Path(self.sefd_freq_file)
+        self.sefd_file = Path(self.sefd_file)
+        self.sefd_rms_file = None
+
+        if self.noise:
+            if self.sefd_freq_file == "":
+                errh.raise_error(ValueError,
+                                 "sefd_freq_file not specified")
+
+            if self.sefd_file == "":
+                errh.raise_error(ValueError, "sefd_file not specified")
+
+            for file in (self.sefd_file, self.sefd_freq_file):
+                if not file.exists():
+                    errh.raise_error(FileNotFoundError,
+                                     f"{str(file)} doesn't exist")
+
+                elif not file.is_file():
+                    errh.raise_error(FileNotFoundError,
+                                     f"{str(file)} is not a file")
+
+    def create_sefd_rms_file(self, file_name: Path, *args, **kwargs):
+        from ..calibration.noise import sefd_to_rms
+
+        sefd_rms = sefd_to_rms(np.loadtxt(self.sefd_file), *args, **kwargs)
+        np.savetxt(file_name, sefd_rms)
+        self.sefd_rms_file = file_name
+
+
+@dataclass
+class SkyComponentConfiguration:
+    create: bool
+    image: Union[str, Path]
+    flux_cutoff: Union[None, float] = None
+
+
+@dataclass
+class SkyModelConfiguration:
+    h21cm: Union[bool, SkyComponentConfiguration]
+    ateam: Union[bool, SkyComponentConfiguration]
+    gdsm: Union[bool, SkyComponentConfiguration]
+    gssm: Union[bool, SkyComponentConfiguration]
+    point_sources: Union[bool, SkyComponentConfiguration]
+
+
+class FarmConfiguration:
+    def __init__(self, configuration_file: Path):
+        self.cfg = load_configuration(configuration_file)
+        self.cfg_file = configuration_file
+
+        self.root_name = self.cfg["directories"]['root_name']
+        self.output_dcy = self.cfg["directories"]['output_dcy']
+        self.telescope_model = self.cfg["directories"]['telescope_model']
+
+        cfg_observation = self.cfg["observation"]
+        self.observation = Observation(cfg_observation["time"],
+                                       cfg_observation["duration"],
+                                       cfg_observation["n_scan"],
+                                       cfg_observation["t_scan"])
+
+        cfg_field = cfg_observation["field"]
+        self.field = Field(cfg_field["ra0"],
+                           cfg_field["dec0"],
+                           cfg_field["frame"],
+                           cfg_field["nxpix"],
+                           cfg_field["nypix"],
+                           cfg_field["cdelt"])
+
+        cfg_correlator = cfg_observation["correlator"]
+        self.correlator = Correlator(cfg_correlator["freq_min"],
+                                     cfg_correlator["freq_max"],
+                                     cfg_correlator["nchan"],
+                                     cfg_correlator["chanwidth"],
+                                     cfg_correlator["t_int"],)
+
+        cfg_calibration = self.cfg["calibration"]
+        self.calibration = Calibration(
+            noise=cfg_calibration["noise"]["include"],
+            tec=cfg_calibration["TEC"]["include"],
+            gains=cfg_calibration["gains"]["include"],
+            dd_effects=cfg_calibration["DD-effects"]["include"],
+            noise_seed=cfg_calibration["noise"]["seed"],
+            sefd_freq_file=cfg_calibration["noise"]["sefd_frequencies_file"],
+            sefd_file=cfg_calibration["noise"]["sefd_file"]
+        )
+
+        self.calibration.create_sefd_rms_file(
+            self.output_dcy / "sefd_rms.txt",
+            len(np.loadtxt(self.telescope_model / 'layout.txt')),
+            self.observation.t_total,
+            self.correlator.chan_width
+        )
+
+        cfg_sky_models = self.cfg["sky_models"]
+        h21cm, ateam, gdsm, gssm, point_sources = (False, ) * 5
+        if cfg_sky_models["21cm"]["include"]:
+            h21cm = SkyComponentConfiguration(
+                cfg_sky_models["21cm"]["create"],
+                cfg_sky_models["21cm"]["image"]
+            )
+
+        if cfg_sky_models["A-Team"]["include"]:
+            ateam = SkyComponentConfiguration(
+                cfg_sky_models["A-Team"]["create"],
+                cfg_sky_models["A-Team"]["image"]
+            )
+
+        if cfg_sky_models["GDSM"]["include"]:
+            gdsm = SkyComponentConfiguration(
+                cfg_sky_models["GDSM"]["create"],
+                cfg_sky_models["GDSM"]["image"]
+            )
+
+        if cfg_sky_models["GSSM"]["include"]:
+            gssm = SkyComponentConfiguration(
+                cfg_sky_models["GSSM"]["create"],
+                cfg_sky_models["GSSM"]["image"]
+            )
+
+        if cfg_sky_models["PS"]["include"]:
+            point_sources = SkyComponentConfiguration(
+                cfg_sky_models["PS"]["create"],
+                cfg_sky_models["PS"]["image"],
+                cfg_sky_models["PS"]["flux_cutoff"]
+            )
+
+        self.sky_model = SkyModelConfiguration(
+            h21cm=h21cm,
+            ateam=ateam,
+            gdsm=gdsm,
+            gssm=gssm,
+            point_sources=point_sources
+        )
+
+        # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
+        #  DECIDE WHETHER TO WRITE AND USE AN INI FILE< OR TO USE THE OSKAR'S
+        #  PYTHON IMPLEMENTATION
+        import oskar
+        self.oskar_sim_interferometer_settings = oskar.SettingsTree('oskar_sim_interferometer')
