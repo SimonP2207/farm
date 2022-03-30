@@ -16,7 +16,7 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.io.fits import Header
 
-from miscellaneous import decorators, error_handling as errh
+from farm.miscellaneous import decorators, error_handling as errh
 from farm import LOGGER
 from farm import astronomy as ast
 from farm import miscellaneous as misc
@@ -279,7 +279,6 @@ class _BaseSkyClass(ABC):
         self._frequencies = np.array([])
         self._tb_data = np.empty((len(self._frequencies), self.n_y, self.n_x),
                                  dtype=np.float32)
-
         # Call __post_init__ equivalent to dataclass' __post_init__
         self.__post_init__()
 

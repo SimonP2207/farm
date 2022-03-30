@@ -28,6 +28,7 @@ class TbFunction(Protocol):
 
 
 def gdsm2016_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
+    import logging
     from pygdsm import GlobalSkyModel2016
     from astropy.io import fits
     from .miscellaneous import generate_random_chars
@@ -38,7 +39,16 @@ def gdsm2016_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
     temp_fitsfile = pathlib.Path(f'temp{generate_random_chars(10)}.fits')
 
     gdsm.generate(freq)
+
+    # Catches warnings thrown by healpy.fitsfunc.write_map which is used by the
+    # BaseSkyModel of pygdsm.base_skymodel. These warnings are "setting the
+    # output map dtype to [dtype('float32')]" and thrown because BaseSkyModel
+    # does not provide healpy's write_map function a dtype.
+    # warnings.simplefilter doesn't work to suppress the warnings as the
+    # warnings are raised by healpy's Logger instance
+    logging.getLogger("healpy").setLevel(logging.CRITICAL)  # raise Logger level
     gdsm.write_fits(str(temp_fitsfile))  # expects str type
+    logging.getLogger("healpy").setLevel(logging.WARNING)  # reset Logger level
 
     # User context manager here to automatically open/close file
     with fits.open(temp_fitsfile) as hdugsm:
@@ -46,7 +56,6 @@ def gdsm2016_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
         i_nu = np.single(reproject_from_healpix(hdugsm[1],
                                                 sky_component.header2d))[0]
         i_nu *= 1e6  # MJy/sr -> Jy/sr
-
     temp_fitsfile.unlink()  # Remove temporary .fits file
 
     return ast.intensity_to_tb(i_nu, freq)

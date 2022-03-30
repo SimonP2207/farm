@@ -147,7 +147,7 @@ class Field:
     _frame: str
     nx: int
     ny: int
-    cdelt: float  # arcsec
+    cdelt: float  # deg
 
     @property
     def coord0(self):
@@ -245,9 +245,9 @@ class FarmConfiguration:
         self.cfg = load_configuration(configuration_file)
         self.cfg_file = configuration_file
 
-        self.root_name = self.cfg["directories"]['root_name']
-        self.output_dcy = self.cfg["directories"]['output_dcy']
-        self.telescope_model = self.cfg["directories"]['telescope_model']
+        self.root_name = Path(self.cfg["directories"]['root_name'])
+        self.output_dcy = Path(self.cfg["directories"]['output_dcy'])
+        self.telescope_model = Path(self.cfg["directories"]['telescope_model'])
 
         cfg_observation = self.cfg["observation"]
         self.observation = Observation(cfg_observation["time"],
@@ -261,7 +261,7 @@ class FarmConfiguration:
                            cfg_field["frame"],
                            cfg_field["nxpix"],
                            cfg_field["nypix"],
-                           cfg_field["cdelt"])
+                           cfg_field["cdelt"] / 3600.)
 
         cfg_correlator = cfg_observation["correlator"]
         self.correlator = Correlator(cfg_correlator["freq_min"],
@@ -330,7 +330,7 @@ class FarmConfiguration:
         )
 
         # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
-        #  DECIDE WHETHER TO WRITE AND USE AN INI FILE< OR TO USE THE OSKAR'S
+        #  DECIDE WHETHER TO WRITE AND USE AN INI FILE< OR TO USE OSKAR'S
         #  PYTHON IMPLEMENTATION
         import oskar
         self.oskar_sim_interferometer_settings = oskar.SettingsTree('oskar_sim_interferometer')
