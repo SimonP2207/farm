@@ -7,9 +7,9 @@ from pathlib import Path
 import numpy as np
 import numpy.testing as npt
 
-from farm.sky_model.classes import _BaseSkyClass, SkyModel, SkyComponent
-from farm.tb_functions import gdsm2016_t_b
-from farm.tests import fits_test_data as ftd
+from farm.sky_model.classes import SkyModel, SkyComponent
+from farm.sky_model.tb_functions import gdsm2016_t_b
+import farm.tests.fits_test_data as ftd
 
 test_dcy = Path(os.path.dirname(__file__))
 test_fits1_inu = test_dcy / 'test_fits1_inu.fits'
@@ -194,5 +194,4 @@ class Test_SkyModel(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    warnings.simplefilter('ignore', category=UserWarning)
     unittest.main()

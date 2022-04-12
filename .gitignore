@@ -3,10 +3,12 @@
 /.idea/
 /.DS_Store
 *.def
+/*.ini
 /*.fits
 data/files/Gsynch_SKAs_original.fits
 data/files/gsm2016_components.h5
 data/files/obs_lightcone_8_512_single_p.fits
+data/files/sky_continuum_sdc3_v1_1.fits
 sky_cuts.py
 testing.py
 sky_modeller.py

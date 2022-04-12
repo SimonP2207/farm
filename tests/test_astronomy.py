@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-import farm.astronomy as ast
+import farm.physics.astronomy as ast
 
 
 REL_TOL = 1e-5

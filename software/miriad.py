@@ -11,7 +11,7 @@ import sys
 import warnings
 
 from . import common as sfuncs
-from ..miscellaneous import error_handling as errh
+from ..miscellaneous import error_handling as errh, decorators
 
 
 if sfuncs.which('miriad') is None:
@@ -32,7 +32,7 @@ def mir_commands():
                     cmd.endswith('.exe'))]
 
 
-@errh.log_errors_warnings
+@decorators.log_errors_warnings
 def mir_func(f, thefilter):
     """Wrapper around miriad system calls"""
 
@@ -71,6 +71,7 @@ def mir_func(f, thefilter):
         proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
+        print(' '.join([f] + args))
 
         # SJDP added: 10/02/22
         try:

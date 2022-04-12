@@ -1,7 +1,10 @@
+# Format of this data file follows OSKAR sky-model data file format
 # Sgr A: Guesstimate from Fred Dulwich, should check
 # For A: data from the Molonglo Southern 4 Jy sample (VizieR).
 # Others from GLEAM reference paper, Hurley-Walker et al. (2017), Table 2.
 # RA(deg), Dec(deg), I(Jy), Q(Jy), U(Jy), V(Jy), freq0(Hz), SPIX, RM(rad/m^2), Major_FWHM(arcsec), Minor_FWHM(arcsec), PA(deg)
+ra_deg, dec_deg, I, Q, U, V, ref_freq_hz, spectral_index, rotation_measure, major_axis_arcsec, minor_axis_arcsec, position_angle_deg
+# deg, deg, Jy, Jy, Jy, Jy, Hz, , rad/m^2, arcsec, arcsec, deg
 266.41683, -29.00781,  2000,0,0,0, 178e6,   0.0, 0, 3600, 3600, 0  # Sgr A
  50.67375, -37.20833,   528,0,0,0, 178e6, -0.51, 0,    0,    0, 0  # For
 201.36667, -43.01917,  1370,0,0,0, 200e6, -0.50, 0,    0,    0, 0  # Cen

@@ -2,20 +2,20 @@ import sys
 import logging
 import argparse
 import pathlib
+from typing import Union
 from datetime import datetime
 
-import farm
 import numpy as np
-from astropy.coordinates import SkyCoord
-import astropy.units as u
+import pandas as pd
+from astropy.io import fits
 
+import farm
 import farm.data.loader as loader
-import farm.astronomy as ast
-import miscellaneous.error_handling as errh
-import farm.tb_functions as tb_funcs
-from farm.calibration.noise import sefd_to_rms
+import farm.physics.astronomy as ast
+import farm.miscellaneous.error_handling as errh
+import farm.sky_model.tb_functions as tb_funcs
 from farm.software import oskar
-from farm.software.oskar import set_oskar_sim_beam_pattern
+from farm.software.oskar import set_oskar_sim_beam_pattern, set_oskar_sim_interferometer
 from farm.software.oskar import run_oskar_sim_beam_pattern
 from farm import LOGGER
 
@@ -29,43 +29,14 @@ if __name__ == '__main__':
         config_file = pathlib.Path(args.config_file)
 
     else:
-        config_file = pathlib.Path(farm.data.DATA_FILES['EXAMPLE_CONFIG'])
+        config_file = pathlib.Path(farm.data.FILES['EXAMPLE_CONFIG'])
 # ############################################################################ #
 # ###################### PARSE CONFIGURATION ################################# #
 # ############################################################################ #
-    # cfg = loader.load_configuration(config_file)
     cfg = loader.FarmConfiguration(config_file)
-    # Files/directories
-    # tel_dir = pathlib.Path(cfg["directories"]["telescope_model"])
-    # output_dir = pathlib.Path(cfg["directories"]["output_dcy"])
-    # sefd_freq_file = pathlib.Path(cfg["calibration"]["noise"]["sefd_frequencies_file"])
-    # sefd_file = pathlib.Path(cfg["calibration"]["noise"]["sefd_file"])
-    # gdsm_file = pathlib.Path(cfg["sky_models"]["GDSM"]["image"])
-    # gssm_file = pathlib.Path(cfg["sky_models"]["GSSM"]["image"])
-    # points_sources_file = pathlib.Path(cfg["sky_models"]["PS"]["image"])
-    # freq_min = cfg["observation"]["correlator"]["freq_min"]  # [Hz]
-    # freq_max = cfg["observation"]["correlator"]["freq_max"]  # [Hz]
-    # nchan = cfg["observation"]["correlator"]["nchan"]  # [Hz]
-    # chan_inc = cfg["observation"]["correlator"]["chanwidth"]  # channel BW [Hz]
-    # fov_deg = cfg["observation"]["field"]["fov"]  # diffuse sky model FOV [deg]
-    # coord0 = SkyCoord(cfg["observation"]["field"]["ra0"],
-    #                   cfg["observation"]["field"]["dec0"],
-    #                   unit=(u.hourangle, u.degree),
-    #                   frame=cfg["observation"]["field"]["frame"])
-    # nx = cfg["observation"]["field"]["nxpix"]  # pixels in field
-    # ny = cfg["observation"]["field"]["nypix"]  # pixels in field
-    # ra0 = cfg["observation"]["field"]["ra0"]
-    # dec0 = cfg["observation"]["field"]["dec0"]
-    # frame = cfg["observation"]["field"]["frame"]
-    # flux_val = cfg["sky_models"]["PS"]["flux_cutoff"]  # flux cutoff beyond radius of fov_deg [Jy]
-    # length_sec = cfg["observation"]["duration"]  # total length of observation
-    # cut_sec = cfg["observation"]["t_scan"]  # length of each cut ('scan')
-    # int_sec = cfg["observation"]["correlator"]["t_int"]  # integration time
-    # num_cuts = cfg["observation"]["n_scan"]  # number of cuts ('scans')
-    # noise_seed = cfg["calibration"]['noise']["noise_seed"]
-    # out_root = cfg['root_name']  # root name for all output files (not directory)
 # ############################################################################ #
 # ########################### DEFINE VARIOUS FILE NAMES ###################### #
+# TODO: Clean this section up and place in farm.loader.FarmConfiguration class #
 # ############################################################################ #
     cfg.output_dcy.mkdir(exist_ok=True)
 
@@ -90,118 +61,30 @@ if __name__ == '__main__':
 # ######################## SET UP THE LOGGER ################################# #
 # ############################################################################ #
     now = datetime.now()
-    logfile = cfg.output_dcy.joinpath(f'farm{now.strftime("%d%b%Y_%H%M%S").upper()}.log')
-    LOGGER.setLevel(logging.DEBUG)
-    log_fmt = "%(asctime)s:: %(levelname)s:: %(module)s.%(funcName)s:: %(message)s"
+    logfile = f'farm{now.strftime("%Y%b%d_%H%M%S").upper()}.log'
+    logfile = cfg.output_dcy / logfile
+    LOGGER.setLevel(logging.DEBUG)  # TODO: Parse this from a command-line arg
     fh = logging.FileHandler(str(logfile), mode="w",
                              encoding=sys.stdout.encoding)
-    fh.setFormatter(logging.Formatter(log_fmt, datefmt="%Y-%m-%d %H:%M:%S"))
+    fh.setFormatter(logging.Formatter(farm.LOG_FMT, datefmt=farm.LOG_DATE_FMT))
     LOGGER.addHandler(fh)
 # ############################################################################ #
-# ###################### CONFIGURATION LOGIC ################################# #
+# ###################### Set up SkyModel instance ############################ #
 # ############################################################################ #
-#     cdelt = fov_deg / nx
-#     freqs = np.linspace(freq_min, freq_max, nchan)
-#     freq_inc = freqs[1] - freqs[0]
-#     start_utc = ast.get_start_time(coord0.ra.deg, length_sec)
-#     num_int_per_scan = cut_sec / int_sec
-
-    # Calculate and save image rms levels from SEFDs
-    # rms_file = cfg.output_dcy / "rms_noise_file.txt"
-    # t_total = cut_sec * num_cuts
-    # n_ants = len(np.loadtxt(tel_dir / 'layout.txt'))
-    # im_rms = sefd_to_rms(np.loadtxt(sefd_file), n_ants, t_total, chan_inc)
-    # np.savetxt(rms_file, im_rms)
-    #
     sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
                                         cfg.field.cdelt, cfg.field.coord0,
                                         cfg.correlator.frequencies)
     components = []
 # ############################################################################ #
-# ####################### Large-scale foreground model ####################### #
+# ########################  # # # # # # # # # # # # # # # #################### #
+# ########################## Initial set up of OSKAR ######################### #
+# ########################  # # # # # # # # # # # # # # # #################### #
 # ############################################################################ #
-    gdsm = None
-    if cfg.sky_model.gdsm:
-        if cfg.sky_model.gdsm.create:
-            gdsm = farm.sky_model.SkyComponent(
-                'GDSM', (cfg.field.nx, cfg.field.ny), cdelt=cfg.field.cdelt,
-                 coord0=cfg.field.coord0, tb_func=tb_funcs.gdsm2016_t_b
-            )
-            gdsm.add_frequency(cfg.correlator.frequencies)
-        else:
-            errh.raise_error(ValueError,
-                             "Loading GDSM from image not currently supported")
-            if not cfg.sky_model.gdsm.image.exists():
-                raise FileNotFoundError("Check path for GDSM image")
-            gdsm = farm.sky_model.SkyComponent.load_from_fits(cfg.sky_model.gdsm.image, 'GDSM')
-        components.append(gdsm)
+# ########## Create oskar.Sky instances for fov and side-lobes to ############ #
+# ############# hold 'tabulated', Gaussian foreground sources ################ #
 # ############################################################################ #
-# ##################### Small-scale foreground model ######################### #
-# ############################################################################ #
-    gssm = None
-    if cfg.sky_model.gssm:
-        if cfg.sky_model.gssm.create:
-            errh.raise_error(NotImplementedError,
-                             "Currently can only load GSSM model from fits")
-        else:
-            if cfg.sky_model.gssm.image == "":
-                gssm = farm.sky_model.SkyComponent.load_from_fits(
-                    farm.data.DATA_FILES['MHD'], 'GSSM', cfg.field.fov[0] / 512,
-                    cfg.field.coord0
-                )
-                if(len(cfg.correlator.frequencies) != len(gssm.frequencies) or
-                   not all(np.isclose(cfg.correlator.frequencies, gssm.frequencies, atol=1.))):
-                    raise ValueError("GSSM .fits cube frequencies differ from"
-                                     "those requested")
-                gssm.rotate(angle=ast.angle_to_galactic_plane(cfg.field.coord0),
-                            inplace=True)
-            elif not cfg.sky_model.gssm.image.exists():
-                errh.raise_error(FileNotFoundError,
-                                 f"{str(cfg.sky_model.gssm.image)} does not exist")
-            else:
-                gssm = farm.sky_model.SkyComponent.load_from_fits(cfg.sky_model.gssm.image, 'GSSM')
-            gssm = gssm.regrid(gdsm)
-            gssm.normalise(gdsm, inplace=True)
-        components.append(gssm)
-# ############################################################################ #
-# ######################## TRECS foreground model ############################ #
-# ############################################################################ #
-    point_sources = None
-    if cfg.sky_model.point_sources:
-        if cfg["sky_models"]["PS"]["create"]:
-            errh.raise_error(NotImplementedError,
-                             "Currently can only load TRECS model from fits")
-        else:
-            if cfg.sky_model.point_sources.image == "":
-                ps = farm.sky_model.SkyComponent.load_from_fits(
-                    farm.data.DATA_FILES['PS'], 'PS', cfg.field.fov[0] / 512,
-                    cfg.field.coord0
-                )
-                if(len(cfg.correlator.frequencies) != len(ps.frequencies) or
-                   not all(np.isclose(cfg.correlator.frequencies, ps.frequencies, atol=1.))):
-                    raise ValueError("Point sources .fits cube frequencies "
-                                     "differ from those requested")
-            elif not cfg.sky_model.point_sources.image.exists():
-                errh.raise_error(FileNotFoundError,
-                                 f"{str(cfg.sky_model.point_sources.image)} does not exist")
-            else:
-                point_sources = farm.sky_model.SkyComponent.load_from_fits(
-                    cfg.sky_model.point_sources.image, 'PS'
-                )
-            point_sources = point_sources.regrid(gdsm)
-# ############################################################################ #
-# ############################ A-Team sources ################################ #
-# ############################################################################ #
-    if cfg.sky_model.ateam:
-        if cfg.sky_model.ateam.create:
-            sky0 = oskar.Sky()
-            sky1 = oskar.Sky()
-            sky_bright = oskar.Sky.from_array(farm.data.ATEAM_DATA)
-            sky_bright_att = oskar.Sky.from_array(farm.data.ATEAM_DATA)
-            sky0.append(sky_bright)
-            sky1.append(sky_bright_att)
-        else:
-            raise(ValueError, "A-Team loading from file not yet supported")
+    sky_fov = oskar.Sky()
+    sky_side_lobes = oskar.Sky()
 # ############################################################################ #
 # ###################### Calculate station beams with OSKAR ################## #
 # ############################################################################ #
@@ -225,7 +108,7 @@ if __name__ == '__main__':
         set_oskar_sim_beam_pattern(f, "observation/num_time_steps",
                                    cfg.observation.n_scan)
         set_oskar_sim_beam_pattern(f, "telescope/input_directory",
-                                   cfg.telescope_model)
+                                   cfg.telescope.model)
         set_oskar_sim_beam_pattern(f, "telescope/pol_mode",
                                    "Scalar")
         set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/fov_deg",
@@ -234,57 +117,294 @@ if __name__ == '__main__':
                                    cfg.field.nx)
         set_oskar_sim_beam_pattern(f, "beam_pattern/root_path",
                                    cfg.root_name)
-        set_oskar_sim_beam_pattern(f, "beam_pattern/station_outputs/fits_image/auto_power",
+        set_oskar_sim_beam_pattern(f,
+                                   "beam_pattern/station_outputs/fits_image/auto_power",
                                    True)
-    run_oskar_sim_beam_pattern(sbeam_ini)
 # ############################################################################ #
 # #################### Calculate telescope model with OSKAR ################## #
 # ############################################################################ #
-    tscp_settings = oskar.SettingsTree('oskar_sim_interferometer')
+    sinterferometer_ini = pathlib.Path("test_sim_interferometer.ini")
+    with open(sinterferometer_ini, 'wt') as f:
+        set_oskar_sim_interferometer(f, 'simulator/double_precision', 'TRUE')
+        set_oskar_sim_interferometer(f, 'simulator/use_gpus', 'FALSE')
+        set_oskar_sim_interferometer(f, 'simulator/max_sources_per_chunk',
+                                     '4096')
 
-    tscp_settings.set_value('simulator/double_precision', 'TRUE')
-    tscp_settings.set_value('simulator/use_gpus', 'FALSE')
-    tscp_settings.set_value('simulator/max_sources_per_chunk', '4096')
+        set_oskar_sim_interferometer(f, 'observation/phase_centre_ra_deg',
+                                     cfg.field.coord0.ra.deg)
+        set_oskar_sim_interferometer(f, 'observation/phase_centre_dec_deg',
+                                     cfg.field.coord0.dec.deg)
+        set_oskar_sim_interferometer(f, 'observation/start_frequency_hz',
+                                     cfg.correlator.freq_min)
+        set_oskar_sim_interferometer(f, 'observation/num_channels',
+                                     cfg.correlator.n_chan)
+        set_oskar_sim_interferometer(f, 'observation/frequency_inc_hz',
+                                     cfg.correlator.freq_inc)
+        set_oskar_sim_interferometer(f, 'observation/length',
+                                     cfg.observation.t_scan)
+        set_oskar_sim_interferometer(f, 'observation/num_time_steps',
+                                     int(cfg.observation.t_scan //
+                                         cfg.correlator.t_int))
+        set_oskar_sim_interferometer(f, 'telescope/input_directory',
+                                     cfg.telescope.model)
+        set_oskar_sim_interferometer(f,
+                                     'telescope/allow_station_beam_duplication',
+                                     'TRUE')
+        set_oskar_sim_interferometer(f, 'telescope/pol_mode', 'Scalar')
+        # Add in ionospheric screen model
+        set_oskar_sim_interferometer(f, 'telescope/ionosphere_screen_type',
+                                     'External')
+        set_oskar_sim_interferometer(f, 'interferometer/channel_bandwidth_hz',
+                                     cfg.correlator.chan_width)
+        set_oskar_sim_interferometer(f, 'interferometer/time_average_sec',
+                                     cfg.correlator.t_int)
+        set_oskar_sim_interferometer(f, 'interferometer/ignore_w_components',
+                                     'FALSE')
 
-    tscp_settings.set_value('observation/phase_centre_ra_deg',
-                            cfg.field.coord0.ra.deg)
-    tscp_settings.set_value('observation/phase_centre_dec_deg',
-                            cfg.field.coord0.dec.deg)
-    tscp_settings.set_value('observation/start_frequency_hz',
-                            cfg.correlator.freq_min)
-    tscp_settings.set_value('observation/num_channels',
-                            cfg.correlator.n_chan)
-    tscp_settings.set_value('observation/frequency_inc_hz',
-                            cfg.correlator.freq_inc)
-    tscp_settings.set_value('observation/length',
-                            cfg.observation.t_scan)
-    tscp_settings.set_value('observation/num_time_steps',
-                            int(cfg.observation.t_scan // cfg.correlator.t_int))
-
-    tscp_settings.set_value('telescope/input_directory', cfg.telescope_model)
-    tscp_settings.set_value('telescope/allow_station_beam_duplication', 'TRUE')
-    tscp_settings.set_value('telescope/pol_mode', 'Scalar')
-    # Add in ionospheric screen model
-    tscp_settings.set_value('telescope/ionosphere_screen_type', 'External')
-
-    tscp_settings.set_value('interferometer/channel_bandwidth_hz', cfg.correlator.chan_width)
-    tscp_settings.set_value('interferometer/time_average_sec', cfg.correlator.t_int)
-    tscp_settings.set_value('interferometer/ignore_w_components', 'FALSE')
-
-    # Add in Telescope noise model via files where rms has been tuned
-    tscp_settings.set_value('interferometer/noise/enable', cfg.calibration.noise)
-    tscp_settings.set_value('interferometer/noise/seed', cfg.calibration.noise_seed)
-    tscp_settings.set_value('interferometer/noise/freq', 'Data')
-    tscp_settings.set_value('interferometer/noise/freq/file', cfg.calibration.sefd_freq_file)
-    tscp_settings.set_value('interferometer/noise/rms', 'Data')
-    tscp_settings.set_value('interferometer/noise/rms/file', cfg.calibration.sefd_rms_file)
+        # Add in Telescope noise model via files where rms has been tuned
+        set_oskar_sim_interferometer(f, 'interferometer/noise/enable',
+                                     cfg.calibration.noise)
+        set_oskar_sim_interferometer(f, 'interferometer/noise/seed',
+                                     cfg.calibration.noise_seed)
+        set_oskar_sim_interferometer(f, 'interferometer/noise/freq', 'Data')
+        set_oskar_sim_interferometer(f, 'interferometer/noise/freq/file',
+                                     cfg.calibration.sefd_freq_file)
+        set_oskar_sim_interferometer(f, 'interferometer/noise/rms', 'Data')
+        set_oskar_sim_interferometer(f, 'interferometer/noise/rms/file',
+                                     cfg.calibration.sefd_rms_file)
+        set_oskar_sim_interferometer(f, 'sky/fits_image/file',
+                                     '/Users/simon.purser/pylib/farm/test_skymodel.fits')
+        set_oskar_sim_interferometer(f, 'sky/fits_image/default_map_units',
+                                     'K')
 # ############################################################################ #
+# ####################### Large-scale foreground model ####################### #
 # ############################################################################ #
+    gdsm = None
+    if cfg.sky_model.gdsm:
+        if cfg.sky_model.gdsm.create:
+            gdsm = farm.sky_model.SkyComponent(
+                name='GDSM',
+                npix=(cfg.field.nx, cfg.field.ny),
+                cdelt=cfg.field.cdelt,
+                coord0=cfg.field.coord0,
+                tb_func=tb_funcs.gdsm2016_t_b
+            )
+            gdsm.add_frequency(cfg.correlator.frequencies)
+        else:
+            errh.raise_error(ValueError,
+                             "Loading GDSM from image not currently supported")
+            # if not cfg.sky_model.gdsm.image.exists():
+            #     raise FileNotFoundError("Check path for GDSM image")
+            # gdsm = farm.sky_model.SkyComponent.load_from_fits(
+            #     fitsfile=cfg.sky_model.gdsm.image,
+            #     name='GDSM'
+            # )
+        components.append(gdsm)
+# ############################################################################ #
+# ##################### Small-scale foreground model ######################### #
+# ############################################################################ #
+    gssm = None
+    if cfg.sky_model.gssm:
+        fits_gssm = None
+        if cfg.sky_model.gssm.create:
+            errh.raise_error(NotImplementedError,
+                             "Currently can only load GSSM model from fits")
+        else:
+            if cfg.sky_model.gssm.image == "":
+                fits_gssm = farm.data.FILES['IMAGES']['MHD']
+            elif cfg.sky_model.gssm.image.exists():
+                fits_gssm = cfg.sky_model.gssm.image
+            else:
+                errh.raise_error(FileNotFoundError,
+                                 f"{cfg.sky_model.gssm.image} does not exist")
+        gssm = farm.sky_model.SkyComponent.load_from_fits(
+            fitsfile=fits_gssm,
+            name='GSSM',
+            cdelt=cfg.field.fov[0] / 512,
+            coord0=cfg.field.coord0,
+            freqs=cfg.correlator.frequencies
+        )
+        gssm.rotate(angle=ast.angle_to_galactic_plane(cfg.field.coord0),
+                    inplace=True)
+        gssm = gssm.regrid(gdsm)
+        gssm.normalise(gdsm, inplace=True)
+        components.append(gssm)
+# ############################################################################ #
+# ########################  # # # # # # # # # # # # # # # #################### #
+# ######################## Extragalactic foreground model #################### #
+# ########################  # # # # # # # # # # # # # # # #################### #
+# ############################################################################ #
+# ############################ A-Team sources ################################ #
+# ############################################################################ #
+    if cfg.sky_model.ateam:
+        ateam_data = farm.data.ATEAM_DATA
+        sky_fov.append_sources(**ateam_data)
+
+        # Imperfectly-demixed, residual A-Team sources in side-lobes
+        if cfg.sky_model.ateam.demix_error:
+            residual_fac = np.ones(len(ateam_data.columns))
+            residual_fac.put(ateam_data.columns.get_loc('I'),
+                             cfg.sky_model.ateam.demix_error)
+            sky_side_lobes.append_sources(**ateam_data * residual_fac)
+# ############################################################################ #
+# ########################## Real sources from surveys ####################### #
+# ############################################################################ #
+    # Also, separate sky model for in-fov and out-fov sources with flux cutoff
+    # for each
+    ps = None
+    if cfg.sky_model.point_sources:
+        if cfg.sky_model.point_sources.create:
+            errh.raise_error(NotImplementedError,
+                             "Currently can only load model from fits")
+        else:
+            if cfg.sky_model.point_sources.image == "":
+                # Parse .fits table data
+                # TODO: Conditional here as to whether to load from the fits
+                #  image or table
+                catalogue = farm.data.FILES['TABLES']['GLEAM']
+                data = farm.data.fits_table_to_dataframe(catalogue)
+
+                # Column name translation of GLEAM_EGC_v2.fits
+                sky_model_cols = {'ra': 'RAJ2000', 'dec': 'DEJ2000',
+                                  'fluxI': 'int_flux_wide',# 'fluxQ': None,
+                                  #'fluxU': None, 'fluxV': None,
+                                  'freq0': 'freq0', 'spix': 'alpha', #'rm': None,
+                                  'maj': 'a_wide', 'min': 'b_wide',
+                                  'pa': 'pa_wide'}
+
+                # Add needed columns to DataFrame
+                # TODO: Put generic spectral index of -0.7 somewhere sensible
+                data[sky_model_cols['spix']] = np.where(np.isnan(data.alpha),
+                                                        -0.7, data.alpha)
+                data['freq0'] = 200e6  # GLEAM reference frequency
+                data['_fov'] = ast.within_square_fov(
+                    cfg.field.fov, cfg.field.coord0.ra.deg,
+                    cfg.field.coord0.dec.deg,
+                    data[sky_model_cols['ra']], data[sky_model_cols['dec']]
+                )
+
+                mask_fov = (
+                    data['_fov'] & (
+                        data.int_flux_wide <
+                        cfg.sky_model.point_sources.flux_inner
+                    )
+                )
+                mask_side_lobes = (data.int_flux_wide >
+                                   cfg.sky_model.point_sources.flux_outer)
+
+                # Add to fov Sky instance
+                oskar.add_dataframe_to_sky(
+                    data[mask_fov], sky_fov, sky_model_cols
+                )
+
+                # Add to side-lobes Sky instance
+                oskar.add_dataframe_to_sky(
+                    data[mask_side_lobes], sky_side_lobes, sky_model_cols
+                )
+
+                # Create SkyComponent instance and save .fits image of GLEAM
+                # sources
+                ps = farm.sky_model.SkyComponent.load_from_fits_table(
+                    sky_model_cols, catalogue, 'GLEAM', cfg.field.cdelt,
+                    cfg.field.coord0, fov=cfg.field.fov,
+                    freqs=cfg.correlator.frequencies,
+                    beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
+                )
+
+                ps.write_fits(pathlib.Path(f"{ps.name}_component.fits"),
+                              unit='JY/PIXEL')
+
+            elif not cfg.sky_model.point_sources.image.exists():
+                errh.raise_error(FileNotFoundError,
+                                 f"{str(cfg.sky_model.point_sources.image)} does not exist")
+            else:
+                errh.raise_error(NotImplementedError,
+                                 "Currently can only load GLEAM model from "
+                                 "fits table")
+# ############################################################################ #
+# ###################### Simulated sources from T-RECs ####################### #
+# ############################################################################ #
+    trecs_sources = None
+    if cfg.sky_model.trecs:
+        fits_trecs = None
+        if cfg.sky_model.trecs.create:
+            errh.raise_error(NotImplementedError,
+                             "Currently can only load model from fits")
+        else:
+            if cfg.sky_model.trecs.image == "":
+                fits_trecs = farm.data.FILES['IMAGES']['TRECS']
+            elif cfg.sky_model.trecs.image.exists():
+                fits_trecs = cfg.sky_model.trecs.image
+            else:
+                errh.raise_error(FileNotFoundError,
+                                 f"{str(cfg.sky_model.trecs.image)} "
+                                 "does not exist")
+        # Parse .fits table data
+        # TODO: Conditional here as to whether to load from the fits
+        #  image or table
+        # Create SkyComponent instance and save .fits image of GLEAM
+        # sources
+        trecs = farm.sky_model.SkyComponent.load_from_fits(
+            fitsfile=fits_trecs,
+            name='TRECS',
+            cdelt=cfg.field.cdelt,
+            coord0=cfg.field.coord0,
+            freqs=cfg.correlator.frequencies
+        )
+
+        trecs = trecs.regrid(gdsm)
+        components.append(trecs)
+# ############################################################################ #
+# ############################# EoR H-21cm signal ############################ #
+# ############################################################################ #
+    h21cm = None
+    if cfg.sky_model.h21cm:
+        fits_h21cm = None
+        if cfg.sky_model.h21cm.create:
+            errh.raise_error(NotImplementedError,
+                             "Currently can only load model from fits")
+        else:
+            if cfg.sky_model.point_sources.image == "":
+                fits_h21cm = farm.data.FILES['IMAGES']['H21CM']
+            elif cfg.sky_model.h21cm.image.exists():
+                fits_h21cm = cfg.sky_model.h21cm.image
+            else:
+                errh.raise_error(FileNotFoundError,
+                                 f"{str(cfg.sky_model.h21cm.image)} "
+                                 "does not exist")
+        # Parse .fits table data
+        # TODO: Conditional here as to whether to load from the fits
+        #  image or table
+        # Create SkyComponent instance and save .fits image of GLEAM
+        # sources
+        h21cm = farm.sky_model.SkyComponent.load_from_fits(
+            fitsfile=fits_h21cm,
+            name='H21CM',
+            cdelt=cfg.field.cdelt,
+            coord0=cfg.field.coord0,
+            freqs=cfg.correlator.frequencies
+        )
+
+        h21cm = h21cm.regrid(gdsm)
+        components.append(h21cm)
+# ############################################################################ #
+# ######## Add all components derived from .fits images to SkyModel ########## #
+# ########## and write .fits images for image-derived components ############# #
 # ############################################################################ #
     sky_model += components
-    gdsm.write_fits(pathlib.Path('test_gdsm.fits'), unit='K')
-    gssm.write_fits(pathlib.Path('test_gssm.fits'), unit='K')
-    sky_model.write_fits(pathlib.Path('test_skymodel.fits'), unit='K')
+    for component in sky_model.components:
+        component.write_fits(pathlib.Path(f"{component.name}_component.fits"),
+                             unit='JY/PIXEL')
+    sky_model.write_fits(pathlib.Path('test_skymodel.fits'), unit='JY/PIXEL')
+# ############################################################################ #
+# ########################  # # # # # # # # # # # # # # # #################### #
+# ########################## Synthetic observing run ######################### #
+# ########################  # # # # # # # # # # # # # # # #################### #
+# ############################################################################ #
+# ########## Create oskar.Sky instances for fov and side-lobes to ############ #
+# ############# hold 'tabulated', Gaussian foreground sources ################ #
+# ############################################################################ #
+    run_oskar_sim_beam_pattern(sbeam_ini)
     # p_k_field, bins_field = pbox.get_power(imdata_gssm[0], (0.002, 0.002,))
     #
     # plt.close('all')

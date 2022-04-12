@@ -46,9 +46,8 @@
     image = ""
 
   [sky_models.A-Team]
-    include = false
-    create = true
-    image = ""
+    include = true
+    demix_error = 0.001  # Factor of imperfect demixing of A-team sources
 
   [sky_models.GDSM]
     include = true
@@ -61,7 +60,14 @@
     image = ""
 
   [sky_models.PS]
-    include = false
+    include = true
     create = false
     image = ""
-    flux_cutoff = 10000.0  # flux cutoff beyond radius of fov_deg, Jy
+    flux_inner = 10.0  # flux cutoff (ceil) within fov fov_deg, Jy
+    flux_outer = 10000.0  # flux cutoff (floor) beyond radius of fov_deg, Jy
+
+  [sky_models.TRECS]
+    include = true
+    create = false
+    image = ""
+    flux_inner = inf # flux upper cutoff

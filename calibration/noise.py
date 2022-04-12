@@ -8,7 +8,8 @@ def sefd_to_rms(sefd: Union[float, npt.NDArray],
                 n_ant: int, t_total: float, bandwidth: float, n_pol: int = 2,
                 efficiency: float = 1.) -> Union[float, npt.NDArray]:
     """
-    System equivalent flux density to image noise [Jy]
+    System equivalent flux density (SEFD) to root-mean-square (rms) image noise
+    [Jy]
 
     Parameters
     ----------
@@ -35,3 +36,6 @@ def sefd_to_rms(sefd: Union[float, npt.NDArray],
     sqrt = np.sqrt(n_pol * n_baselines * t_total * bandwidth)
 
     return sefd / (efficiency * sqrt)
+
+
+def tec_screen(): ...

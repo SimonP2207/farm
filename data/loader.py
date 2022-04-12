@@ -4,18 +4,17 @@ All methods related to the loading of FARM configuration files
 import datetime
 import random
 from pathlib import Path
-from typing import Union
+from typing import Union, Tuple
+from dataclasses import dataclass
 
 import numpy as np
-import numpy.typing as npt
 import toml
-from dataclasses import dataclass
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
-from farm import LOGGER
-from miscellaneous import error_handling as errh
+from .. import LOGGER
+from ..miscellaneous import error_handling as errh
 
 
 def check_file_exists(filename: Path) -> bool:
@@ -68,6 +67,8 @@ def check_config_validity(config_dict: dict):
                  ('calibration', 'noise', 'sefd_frequencies_file', str),
                  ('calibration', 'noise', 'sefd_file', str),
                  ('calibration', 'TEC', 'include', bool),
+                 ('calibration', 'gains', 'include', bool),
+                 ('calibration', 'DD-effects', 'include', bool),
                  ('sky_models', '21cm', 'include', bool),
                  ('sky_models', '21cm', 'create', bool),
                  ('sky_models', '21cm', 'image', str),
@@ -82,7 +83,13 @@ def check_config_validity(config_dict: dict):
                  ('sky_models', 'GSSM', 'image', str),
                  ('sky_models', 'PS', 'include', bool),
                  ('sky_models', 'PS', 'create', bool),
-                 ('sky_models', 'PS', 'image', str),)
+                 ('sky_models', 'PS', 'image', str),
+                 ('sky_models', 'PS', 'flux_inner', float),
+                 ('sky_models', 'PS', 'flux_outer', float),
+                 ('sky_models', 'TRECS', 'include', bool),
+                 ('sky_models', 'TRECS', 'create', bool),
+                 ('sky_models', 'TRECS', 'image', str),
+                 ('sky_models', 'TRECS', 'flux_inner', float))
 
     for param in structure:
         entry = config_dict.copy()
@@ -155,12 +162,8 @@ class Field:
                         unit=(u.hourangle, u.deg))
 
     @property
-    def cdelt_deg(self):
-        return self.cdelt / 3600.
-
-    @property
     def fov(self):
-        return self.nx * self.cdelt_deg, self.ny * self.cdelt_deg
+        return self.nx * self.cdelt, self.ny * self.cdelt
 
     @property
     def area(self):
@@ -225,10 +228,53 @@ class Calibration:
 
 
 @dataclass
+class Station:
+    station_model: Path
+    position: Tuple[float, float, float]
+
+    def __post_init__(self):
+        ants_position_file = self.station_model / 'layout.txt'
+        xs, ys = np.loadtxt(ants_position_file).T
+
+        self.ants = {}
+        for number in range(len(xs)):
+            self.ants[number] = xs[number], ys[number]
+
+        self.n_ant = len(self.ants)
+
+
+@dataclass
+class Telescope:
+    model: Path
+
+    def __post_init__(self):
+        self.lat, self.lon = np.loadtxt(self.model / 'position.txt')
+
+        station_position_file = self.model / 'layout.txt'
+        xs, ys, zs = np.loadtxt(station_position_file).T
+
+        stations = []
+        for f in self.model.iterdir():
+            if f.is_dir() and 'station' in f.name:
+                stations.append(f)
+        stations.sort()
+
+        self.stations = {}
+        for s in stations:
+            number = int(s.name.strip('station'))
+            station_position = xs[number], ys[number], zs[number]
+            self.stations[number] = Station(stations[number], station_position)
+
+        self.n_stations = len(self.stations)
+
+
+@dataclass
 class SkyComponentConfiguration:
     create: bool
     image: Union[str, Path]
-    flux_cutoff: Union[None, float] = None
+    flux_inner: Union[None, float] = None
+    flux_outer: Union[None, float] = None
+    demix_error: Union[None, float] = None
 
 
 @dataclass
@@ -238,6 +284,7 @@ class SkyModelConfiguration:
     gdsm: Union[bool, SkyComponentConfiguration]
     gssm: Union[bool, SkyComponentConfiguration]
     point_sources: Union[bool, SkyComponentConfiguration]
+    trecs: Union[bool, SkyComponentConfiguration]
 
 
 class FarmConfiguration:
@@ -247,7 +294,9 @@ class FarmConfiguration:
 
         self.root_name = Path(self.cfg["directories"]['root_name'])
         self.output_dcy = Path(self.cfg["directories"]['output_dcy'])
-        self.telescope_model = Path(self.cfg["directories"]['telescope_model'])
+
+        tscp_model = Path(self.cfg["directories"]['telescope_model'])
+        self.telescope = Telescope(tscp_model)
 
         cfg_observation = self.cfg["observation"]
         self.observation = Observation(cfg_observation["time"],
@@ -256,11 +305,9 @@ class FarmConfiguration:
                                        cfg_observation["t_scan"])
 
         cfg_field = cfg_observation["field"]
-        self.field = Field(cfg_field["ra0"],
-                           cfg_field["dec0"],
+        self.field = Field(cfg_field["ra0"], cfg_field["dec0"],
                            cfg_field["frame"],
-                           cfg_field["nxpix"],
-                           cfg_field["nypix"],
+                           cfg_field["nxpix"], cfg_field["nypix"],
                            cfg_field["cdelt"] / 3600.)
 
         cfg_correlator = cfg_observation["correlator"]
@@ -283,13 +330,13 @@ class FarmConfiguration:
 
         self.calibration.create_sefd_rms_file(
             self.output_dcy / "sefd_rms.txt",
-            len(np.loadtxt(self.telescope_model / 'layout.txt')),
+            len(np.loadtxt(self.telescope.model / 'layout.txt')),
             self.observation.t_total,
             self.correlator.chan_width
         )
 
         cfg_sky_models = self.cfg["sky_models"]
-        h21cm, ateam, gdsm, gssm, point_sources = (False, ) * 5
+        h21cm, ateam, gdsm, gssm, point_sources, trecs = (False, ) * 6
         if cfg_sky_models["21cm"]["include"]:
             h21cm = SkyComponentConfiguration(
                 cfg_sky_models["21cm"]["create"],
@@ -298,8 +345,9 @@ class FarmConfiguration:
 
         if cfg_sky_models["A-Team"]["include"]:
             ateam = SkyComponentConfiguration(
-                cfg_sky_models["A-Team"]["create"],
-                cfg_sky_models["A-Team"]["image"]
+                create=False,
+                image="",
+                demix_error=cfg_sky_models["A-Team"]["demix_error"]
             )
 
         if cfg_sky_models["GDSM"]["include"]:
@@ -318,7 +366,15 @@ class FarmConfiguration:
             point_sources = SkyComponentConfiguration(
                 cfg_sky_models["PS"]["create"],
                 cfg_sky_models["PS"]["image"],
-                cfg_sky_models["PS"]["flux_cutoff"]
+                cfg_sky_models["PS"]["flux_inner"],
+                cfg_sky_models["PS"]["flux_outer"]
+            )
+
+        if cfg_sky_models["TRECS"]["include"]:
+            trecs = SkyComponentConfiguration(
+                cfg_sky_models["TRECS"]["create"],
+                cfg_sky_models["TRECS"]["image"],
+                cfg_sky_models["TRECS"]["flux_inner"],
             )
 
         self.sky_model = SkyModelConfiguration(
@@ -326,11 +382,15 @@ class FarmConfiguration:
             ateam=ateam,
             gdsm=gdsm,
             gssm=gssm,
-            point_sources=point_sources
+            point_sources=point_sources,
+            trecs=trecs,
         )
 
         # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
-        #  DECIDE WHETHER TO WRITE AND USE AN INI FILE< OR TO USE OSKAR'S
+        #  DECIDE WHETHER TO WRITE AND USE AN INI FILE OR TO USE OSKAR'S
         #  PYTHON IMPLEMENTATION
         import oskar
-        self.oskar_sim_interferometer_settings = oskar.SettingsTree('oskar_sim_interferometer')
+        self.oskar_sim_interferometer_settings = oskar.SettingsTree(
+            'oskar_sim_interferometer'
+        )
+

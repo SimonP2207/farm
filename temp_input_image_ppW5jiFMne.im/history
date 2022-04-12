@@ -1,9 +1,0 @@
-CUNIT1  = 'deg     '
-CUNIT2  = 'deg     '
-CUNIT3  = 'Hz      '
-FITS: Miriad fits: Revision 1.36, 2021/06/03 07:09:31 UTC
-FITS: Executed on: 2022-03-30T15:01:22.0
-FITS: Command line inputs follow:
-FITS:   in=/var/folders/pq/0z61lr4x529bph79sd2mx3dhtw3wr6/T/temp_input_image_ppW5jiFMne_im_temp_WQ8qIAf3XA.fits
-FITS:   out=temp_input_image_ppW5jiFMne.im
-FITS:   op=xyin

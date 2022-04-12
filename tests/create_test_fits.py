@@ -1,10 +1,6 @@
-import numpy as np
-import astropy.units as u
 from astropy.io import fits
 from astropy.io.fits import Header
-from astropy.coordinates import SkyCoord
 
-import farm.astronomy as ast
 from fits_test_data import *
 
 

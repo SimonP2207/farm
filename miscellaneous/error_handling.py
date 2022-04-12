@@ -4,23 +4,7 @@ either event, expecially in the error case whereby logs are written before the
 exception terminates the program
 """
 import warnings
-from farm import LOGGER
-
-
-def log_errors_warnings(function):
-    """
-    Decorator for logging and raising errors/warnings issued during method calls
-    """
-    def wrapper(*args, **kwargs):
-        try:
-            with warnings.catch_warnings(record=True) as w:
-                result = function(*args, **kwargs)
-                for wrng in [_.message for _ in w]:
-                    issue_warning(wrng.category, wrng.args[0])
-        except Exception as e:
-            raise_error(e.__class__, e.args[0])
-        return result
-    return wrapper
+from .. import LOGGER
 
 
 def raise_error(error_type, error_message: str, log: bool = True):

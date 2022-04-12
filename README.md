@@ -3,6 +3,7 @@
 ## Requirements
 - python 3.6+ (f-string dependency)
 ### Python modules
+- [ARatmospy](https://github.com/SimonP2207/ARatmospy) (no version information available)
 - [astropy](https://docs.astropy.org/en/stable/) (developed with v5.0)
 - [h5py](https://docs.h5py.org/en/stable/) (developed with v3.6.0)
 - [jupyter](https://jupyter.org/) (developed with v1.0.0)
@@ -51,6 +52,9 @@ pip install git+https://github.com/telegraphic/pygdsm
 
 # OSKAR
 pip install 'git+https://github.com/OxfordSKA/OSKAR.git@master#egg=oskarpy&subdirectory=python'
+
+# Our fork of the ARatmospy repository for simulating the TEC screen
+pip install git+https://github.com/SimonP2207/ARatmospy
 ```
 
 ### A note on miriad and casa
@@ -99,3 +103,14 @@ skymodel += (gssm, gdsm)  # Equivalent to skymodel.add_component((gssm, gdsm))
 # Write the sky model to a .fits file
 skymodel.write_fits(Path("test_skymodel_Inu.fits"), unit='JY/SR')
 ```
+
+## For co-developers
+### Testing
+For the unit-testing, Python's standard library package, `unittest` is used. 
+Command line use is:
+```commandline
+python -m unittest /path/to/farm/tests/test_*.py
+```
+Otherwise, good IDEs (such as PyCharm) have inbuilt testing which can be set up 
+for `unittest`. This is the preferred approach due to the inhuilt debugger which 
+can be run in conjunction with the testing package.

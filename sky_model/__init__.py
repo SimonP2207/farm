@@ -1,1 +1,4 @@
-from .classes import SkyModel, SkyComponent, SkyClassType, _BaseSkyClass
+from typing import TypeVar
+from .classes import SkyModel, SkyComponent, _BaseSkyClass
+
+SkyClassType = TypeVar('SkyClassType', bound='_BaseSkyClass')
