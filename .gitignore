@@ -1,6 +1,7 @@
 */__pycache__
 *.pyc
 /.idea/
+/.vscode/
 /.DS_Store
 *.def
 /*.ini
@@ -11,4 +12,5 @@ data/files/obs_lightcone_8_512_single_p.fits
 data/files/sky_continuum_sdc3_v1_1.fits
 sky_cuts.py
 testing.py
+test.py
 sky_modeller.py
