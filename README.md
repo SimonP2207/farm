@@ -1,7 +1,7 @@
 # FARM
 **F**oreground **A**ll-scale **R**adio **M**odeller.
 ## Requirements
-- python 3.6+ (f-string dependency)
+- python 3.8+ (required for most up-to-date numpy library)
 ### Python modules
 - [ARatmospy](https://github.com/SimonP2207/ARatmospy) (no version information available)
 - [astropy](https://docs.astropy.org/en/stable/) (developed with v5.0)
@@ -10,6 +10,7 @@
 - [matplotlib](https://matplotlib.org/) (developed with v3.5.0)
 - [numpy](https://numpy.org/) (developed with v1.22.1)
 - [oskarpy](https://fdulwich.github.io/oskarpy-doc) (no version information available)
+- [pandas](https://pandas.pydata.org/) (developed with v1.4.1)
 - [powerbox](https://powerbox.readthedocs.io/en/latest/) (developed with v0.6.1)
 - [py21cmfast](https://21cmfast.readthedocs.io/en/latest/reference/py21cmfast.html) (no version information available)
 - [pygdsm](https://github.com/telegraphic/pygdsm) (no version information available)
@@ -30,16 +31,19 @@ For the python modules detailed above (and their dependencies (e.g. `gsl`), inst
 **NOTE**: Installation of `py21cmFAST` on MacOSX leads to issues during compilation with the error, `clang: error: unsupported option '-fopenmp'` being thrown when installing via `pip install `. To properly resolve this and install `py21cmFAST` is detailed [here](https://github.com/21cmfast/21cmFAST/issues/84).
 
 ```commandline
-conda create -n farm python=3
+conda create -n farm python>3.8
 conda activate farm
 
 # General package requirements
-conda install astropy gsl h5py jupyter matplotlib numpy reproject scipy toml
+conda install astropy gsl h5py jupyter matplotlib numpy pandas scipy toml reproject
+
+# Installation of reproject can fail, in which case:
+conda install -c conda-forge reproject
 
 # py21cmFAST
 # OpenMP enabled libraries of fftw are available through conda-forge, using "conda install fftw" does not include openmp threads
-conda install -c conda-forge fftw
-conda install -c conda-forge/label/cf201901 gcc
+conda install -c conda-forge fftw  # Only needed for MacOS
+conda install -c conda-forge/label/cf201901 gcc  # Only needed for MacOS
 conda install -c conda-forge 21cmFAST
 
 # powerbox
