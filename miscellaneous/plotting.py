@@ -2,8 +2,11 @@
 Contains all plotting related functionality, matplotlib being data visualisation
 tool-of-choice
 """
-from typing import Union
+from typing import Union, Tuple, List
 import numpy as np
+import numpy.typing as npt
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation
 import matplotlib.pylab as plt
 import matplotlib.axes
 from matplotlib import cm
@@ -12,55 +15,120 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from ..sky_model.classes import SkyClassType
 from .image_functions import calculate_spix
+from . import decorators
+
+SUBPLOT_WIDTH_INCHES = 3.32153
+COLORBAR_WIDTH_FRAC = 0.1  # Colorbar width as percentage of parent axes
+
+assert 0 < COLORBAR_WIDTH_FRAC < 1, "Invalid fractional colorbar width"
 
 
-# def login_required(f):
-#     # This function is what we "replace" hello with
-#     def wrapper(*args, **kw):
-#         args[0].client_session['test'] = True
-#         logged_in = 0
-#         if logged_in:
-#             return f(*args, **kw)  # Call hello
-#         else:
-#             return redirect(url_for('login'))
-#     return wrapper
-#
-#
-# from functools import wraps
-# def create_ax_if_needed(f):
-#     @wraps(f)
-#     def wrapper(*args, **kwargs):
-#         args_to_kwargs = dict(zip(f.__code__.co_varnames, args))
-#         if 'ax' in args_to_kwargs or 'ax' in kwargs:
-#
-#
-#         return f(*args, **kwargs)
-#     return wrapper
+def flux(sky_model_type: Union[None, SkyClassType] = None,
+         data_cube: Union[None, npt.ArrayLike] = None,
+         frequencies: Union[None, npt.ArrayLike] = None,
+         extent: Union[None, Tuple[float, float]] = None,
+         precision: int = 3,
+         vmin: Union[None, float] = None,
+         vmax: Union[None, float] = None,
+         ax: Union[None, matplotlib.axes.Axes] = None,
+         cax: Union[None, matplotlib.axes.Axes] = None,
+         savefig: Union[str, bool] = False
+         ) -> Tuple[matplotlib.figure.Figure,
+                    Tuple[matplotlib.axes.Axes,
+                          matplotlib.axes.Axes]]:
+    """
+    Plot of the spectral index across a SkyModel of SkyComponent instance
 
-def plot_spix(sky_model_type: SkyClassType, precision: float = 0.1,
-              ax: Union[None, matplotlib.axes.Axes] = None,
-              cax: Union[None, matplotlib.axes.Axes] = None,
-              savefig: Union[str, bool] = False):
-    spix = calculate_spix(sky_model_type)
+    Parameters
+    ----------
+    sky_model_type
+        SkyModel or SkyComponent instance
+    data_cube
+        3D np.ndarray (FREQ, X, Y) containing intensities/fluxes. If None, it is
+         parsed from sky_model_type
+    frequencies
+         1D np.ndarray containing frequencies of channels corresponding to
+         zeroth axis of data_cube. If None, it is parsed from sky_model_type
+    extent
+        Tuple containing extent of x and y-axes [deg]. If None, it is parsed
+        from sky_model_type. If sky_model_type is None, values of (1., 1.) are
+        assigned
+    precision
+        Number of decimal points of precision on spectral index scale
+    ax
+        matplotlib.axes.Axes instance to plot onto. If None (default),
+        matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
+    cax
+        matplotlib.axes.Axes instance to use for colorbar. If None, one is
+        created by taking space from ax
+    savefig
+        Full path to save the resulting figure to. If False, figure is not saved
+        (default)
 
-    vmin = np.floor(np.nanmin(spix) / precision) * precision
-    vmax = np.ceil(np.nanmax(spix) / precision) * precision
+    Returns
+    -------
+    Tuple of matplotlib.figure.Figure, (matplotlib.axes.Axes,
+    matplotlib.axes.Axes) which corresponding to (figure, (plot axis, colorbar
+    axis)
+
+    Raises
+    ------
+    ValueError
+        If sky_model_type is not specified and one of data_cube or frequencies
+        is not specified either
+    """
+    if sky_model_type is not None:
+        data_cube = sky_model_type.data("JY/PIXEL")
+        frequencies = sky_model_type.frequencies
+        extent = (sky_model_type.n_x * sky_model_type.cdelt,
+                  sky_model_type.n_y * sky_model_type.cdelt)
+    else:
+        if None in (data_cube, frequencies):
+            raise ValueError("If sky_model_type is not specified, data_cube "
+                             "and frequencies must not be None")
+
+    # data_cube += 0.0033611419381985564 - np.nanmean(data_cube)
+    flux_ = np.nanmean(data_cube, axis=0)
+
+
+    fac_precision = 1.0
+    for i in range(precision):
+        fac_precision /= 10.0
+
+    if vmin is None:
+        vmin = np.floor(np.nanmin(flux_) / fac_precision) * fac_precision
+    if vmax is None:
+        vmax = np.ceil(np.nanmax(flux_) / fac_precision) * fac_precision
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
+        fig, ax = plt.subplots(1, 1,
+                               figsize=(SUBPLOT_WIDTH_INCHES /
+                                        (1 + COLORBAR_WIDTH_FRAC),
+                                        SUBPLOT_WIDTH_INCHES))
+    else:
+        fig = ax.figure
 
     if cax is None:
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("top", size="5%", pad=0.0)
+        from mpl_toolkits.axes_grid1.axes_size import Fraction, AxesX
 
-    cmap = cm.get_cmap('jet', 12)
-    im = ax.imshow(spix, vmin=vmin, vmax=vmax, cmap=cmap,
-                   extent=(+sky_model_type.n_x / 2 * sky_model_type.cdelt,
-                           -sky_model_type.n_x / 2 * sky_model_type.cdelt,
-                           -sky_model_type.n_y / 2 * sky_model_type.cdelt,
-                           +sky_model_type.n_y / 2 * sky_model_type.cdelt))
-    plt.colorbar(im, cax=cax, ax=ax, orientation='horizontal')
+        divider = make_axes_locatable(ax)
+        cbar_size = Fraction(COLORBAR_WIDTH_FRAC / (1.0 - COLORBAR_WIDTH_FRAC),
+                             AxesX(ax))
+        cax = divider.append_axes("right", size=cbar_size, pad=0.0)
+
+    cmap = cm.get_cmap('plasma', 12)
+
+    if extent is not None:
+        im = ax.imshow(flux_, vmin=vmin, vmax=vmax, cmap=cmap,
+                       extent=(+extent[0] / 2, -extent[0] / 2,
+                               -extent[1] / 2, +extent[1] / 2))
+    else:
+        ny, nx = np.shape(data_cube)[1:]
+        im = ax.imshow(flux_, vmin=vmin, vmax=vmax, cmap=cmap,
+                       extent=(+nx / 2, -nx / 2, -ny / 2, +ny / 2))
+
+    plt.colorbar(im, cax=cax, ax=ax, orientation='vertical')
     cax.xaxis.tick_top()
 
     ax.set_xticks(range(-4, 5)[::-1])
@@ -72,23 +140,180 @@ def plot_spix(sky_model_type: SkyClassType, precision: float = 0.1,
     ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
                    right=True, direction='in')
 
-    ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
-    ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[deg\right]}$')
+    if extent:
+        ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
+        ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[deg\right]}$')
+    else:
+        ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[pixel\right]}$')
+        ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[pixel\right]}$')
 
-    cax.set_xticks(np.arange(vmin, vmax + precision, precision))
+    # cax.set_yticks(np.arange(vmin, vmax + fac_precision, fac_precision))
 
-    cax.text(0.5, 0.45, r'$\alpha$', transform=cax.transAxes,
+    cax.text(0.5, 0.5, r'$S_\nu \, \left[ \mathrm{Jy \, pixel^{-1}} \right]$',
+             transform=cax.transAxes, rotation=90., color='w',
              horizontalalignment='center', verticalalignment='center')
 
-    if not savefig:
-        plt.show()
-    else:
+    if savefig:
         fig.savefig(savefig, dpi=300, bbox_inches='tight')
 
+    return fig, (ax, cax)
 
-def plot_power_spectrum(sky_model_type: SkyClassType, freq: float,
-                        ax: Union[None, matplotlib.axes.Axes] = None,
-                        savefig: Union[str, bool] = False):
+
+def spix(sky_model_type: Union[None, SkyClassType] = None,
+         data_cube: Union[None, npt.ArrayLike] = None,
+         frequencies: Union[None, npt.ArrayLike] = None,
+         extent: Union[None, Tuple[float, float]] = None,
+         precision: int = 1,
+         vmin: Union[None, float] = None,
+         vmax: Union[None, float] = None,
+         ax: Union[None, matplotlib.axes.Axes] = None,
+         cax: Union[None, matplotlib.axes.Axes] = None,
+         savefig: Union[str, bool] = False
+         ) -> Tuple[matplotlib.figure.Figure,
+                    Tuple[matplotlib.axes.Axes,
+                          matplotlib.axes.Axes]]:
+    """
+    Plot of the spectral index across a SkyModel of SkyComponent instance
+
+    Parameters
+    ----------
+    sky_model_type
+        SkyModel or SkyComponent instance
+    data_cube
+        3D np.ndarray (FREQ, X, Y) containing intensities/fluxes. If None, it is
+         parsed from sky_model_type
+    frequencies
+         1D np.ndarray containing frequencies of channels corresponding to
+         zeroth axis of data_cube. If None, it is parsed from sky_model_type
+    extent
+        Tuple containing extent of x and y-axes [deg]. If None, it is parsed
+        from sky_model_type. If sky_model_type is None, values of (1., 1.) are
+        assigned
+    precision
+        Number of decimal points of precision on spectral index scale
+    ax
+        matplotlib.axes.Axes instance to plot onto. If None (default),
+        matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
+    cax
+        matplotlib.axes.Axes instance to use for colorbar. If None, one is
+        created by taking space from ax
+    savefig
+        Full path to save the resulting figure to. If False, figure is not saved
+        (default)
+
+    Returns
+    -------
+    Tuple of matplotlib.figure.Figure, (matplotlib.axes.Axes,
+    matplotlib.axes.Axes) which corresponding to (figure, (plot axis, colorbar
+    axis)
+
+    Raises
+    ------
+    ValueError
+        If sky_model_type is not specified and one of data_cube or frequencies
+        is not specified either
+    """
+    if sky_model_type is not None:
+        data_cube = sky_model_type.data("JY/PIXEL")
+        frequencies = sky_model_type.frequencies
+        extent = (sky_model_type.n_x * sky_model_type.cdelt,
+                  sky_model_type.n_y * sky_model_type.cdelt)
+    else:
+        if None in (data_cube, frequencies):
+            raise ValueError("If sky_model_type is not specified, data_cube "
+                             "and frequencies must not be None")
+
+    # data_cube += 0.0033611419381985564 - np.nanmean(data_cube)
+    spix_, _ = calculate_spix(data_cube, frequencies, interpolate_nans=False)
+
+    fac_precision = 1.0
+    for i in range(precision):
+        fac_precision /= 10.0
+
+    if vmin is None:
+        vmin = np.floor(np.nanmin(spix_) / fac_precision) * fac_precision
+    if vmax is None:
+        vmax = np.ceil(np.nanmax(spix_) / fac_precision) * fac_precision
+
+    if ax is None:
+        plt.close('all')
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
+    else:
+        fig = ax.figure
+
+    if cax is None:
+        from mpl_toolkits.axes_grid1.axes_size import Fraction, AxesX
+
+        divider = make_axes_locatable(ax)
+        cbar_size = Fraction(COLORBAR_WIDTH_FRAC / (1.0 - COLORBAR_WIDTH_FRAC),
+                             AxesX(ax))
+        cax = divider.append_axes("right", size=cbar_size, pad=0.0)
+
+    cmap = cm.get_cmap('jet', 12)
+
+    if extent is not None:
+        im = ax.imshow(spix_, vmin=vmin, vmax=vmax, cmap=cmap,
+                       extent=(+extent[0] / 2, -extent[0] / 2,
+                               -extent[1] / 2, +extent[1] / 2))
+    else:
+        ny, nx = np.shape(data_cube)[1:]
+        im = ax.imshow(spix_, vmin=vmin, vmax=vmax, cmap=cmap,
+                       extent=(+nx / 2, -nx / 2, -ny / 2, +ny / 2))
+
+    plt.colorbar(im, cax=cax, ax=ax, orientation='vertical')
+    cax.xaxis.tick_top()
+
+    ax.set_xticks(range(-4, 5)[::-1])
+    ax.set_yticks(range(-4, 5))
+
+    ax.yaxis.set_minor_locator(MultipleLocator(0.5))
+    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
+
+    ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
+                   right=True, direction='in')
+
+    if extent:
+        ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
+        ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[deg\right]}$')
+    else:
+        ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[pixel\right]}$')
+        ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[pixel\right]}$')
+
+    cax.set_yticks(np.arange(vmin, vmax + fac_precision, fac_precision))
+
+    cax.text(0.5, 0.5, r'$\alpha$', transform=cax.transAxes, color='w',
+             horizontalalignment='center', verticalalignment='center',
+             rotation=90.,)
+
+    if savefig:
+        fig.savefig(savefig, dpi=300, bbox_inches='tight')
+
+    return fig, (ax, cax)
+
+
+def power_spectrum(sky_model_type: SkyClassType, freq: float,
+                   ax: Union[None, matplotlib.axes.Axes] = None,
+                   savefig: Union[str, bool] = False):
+    """
+
+    Parameters
+    ----------
+    sky_model_type
+        SkyModel or SkyComponent instance
+    freq
+        Frequency at which to plot the power-spectrum
+    ax
+        matplotlib.axes.Axes instance to plot onto. If None (default),
+        matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
+    savefig
+        Full path to save the resulting figure to. If False, figure is not saved
+        (default)
+
+    Returns
+    -------
+    Tuple of matplotlib.figure.Figure, matplotlib.axes.Axes, corresponding to
+    (figure, plot axis)
+    """
     import powerbox as pbox
 
     p_k_field, bins_field = pbox.get_power(sky_model_type.t_b(freq),
@@ -97,6 +322,8 @@ def plot_power_spectrum(sky_model_type: SkyClassType, freq: float,
     if ax is None:
         plt.close('all')
         fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
+    else:
+        fig = ax.figure
 
     ax.plot(bins_field, p_k_field, 'b-')
 
@@ -107,3 +334,139 @@ def plot_power_spectrum(sky_model_type: SkyClassType, freq: float,
         plt.show()
     else:
         fig.savefig(savefig, dpi=300, bbox_inches='tight')
+
+    return fig, ax
+
+
+# noinspection PyUnresolvedReferences
+@decorators.suppress_warnings("astropy", "erfa")
+def target_altaz(t0: Time,
+                 tscop_location: EarthLocation,
+                 coord_target: SkyCoord,
+                 ax: Union[None, matplotlib.axes.Axes] = None,
+                 cax: Union[None, matplotlib.axes.Axes] = None,
+                 scan_times: Union[None, List[Tuple[Time, Time]]] = None,
+                 savefig: Union[str, bool] = False
+                 ) -> Tuple[matplotlib.figure.Figure,
+                            Tuple[matplotlib.axes.Axes,
+                                  matplotlib.axes.Axes]]:
+    """
+    Plot target altitude and azimuth as a function of time with colorscale of
+    the elevation curve being the azimuth
+
+    Parameters
+    ----------
+    t0
+        Start-time of first scan
+    tscop_location
+        Location of the telescope
+    coord_target
+        Celestial coordinate of the pointing centre
+    ax
+        matplotlib.axes.Axes instance to plot onto. If None (default),
+        matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
+    cax
+        matplotlib.axes.Axes instance to use for colorbar for the azimuth
+        color-scale. If None, one is created by taking space from ax
+    scan_times
+        Scan times of observations as list of 2-tuples containing (start, end)
+        times. If None, no scan times are plotted
+    savefig
+        Full path to save the resulting figure to. If False, figure is not saved
+        (default)
+
+    Returns
+    -------
+    Tuple of matplotlib.figure.Figure, (matplotlib.axes.Axes,
+    matplotlib.axes.Axes) which corresponding to (figure, (plot axis, colorbar
+    axis)
+    """
+    import astropy.units as u
+    from astropy.coordinates import AltAz, get_sun
+
+    t0_midnight = Time(t0.strftime("%Y-%m-%d 00:00:00.000"),
+                       scale='utc',
+                       location=(f'{tscop_location.lon.value:.5f}d',
+                                 f'{tscop_location.lat.value:.5f}d'))
+
+    if scan_times:
+        obs_duration = (max([end for _, end in scan_times]) -
+                        t0_midnight).to_value('h')
+        dt = np.linspace(0, obs_duration + 24 - (obs_duration % 24),
+                         500) * u.hour
+    else:
+        dt = np.linspace(0, 24, 500) * u.hour
+
+    times = t0_midnight + dt
+    dhours = (times - t0_midnight).to('h')
+    frame = AltAz(obstime=times, location=tscop_location)
+    sun_alts_azs = get_sun(times).transform_to(frame)
+    alts_azs = coord_target.transform_to(frame)
+
+    if ax is None:
+        plt.close('all')
+        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES,
+                                              SUBPLOT_WIDTH_INCHES / 1.1))
+    else:
+        fig = ax.figure
+
+    if cax is None:
+        from mpl_toolkits.axes_grid1.axes_size import Fraction, AxesX
+
+        divider = make_axes_locatable(ax)
+        cbar_size = Fraction(COLORBAR_WIDTH_FRAC / (1.0 - COLORBAR_WIDTH_FRAC),
+                             AxesX(ax))
+        cax = divider.append_axes("right", size=cbar_size, pad=0.0)
+
+    points = ax.scatter(dhours.value, alts_azs.alt, c=alts_azs.az,
+                        lw=0, s=8, cmap='twilight_shifted', vmin=0., vmax=360.,
+                        zorder=3)
+    ax.fill_between(dhours.value, 0, 90, sun_alts_azs.alt < -0 * u.deg,
+                    color=(0.5, 0.5, 0.5, 0.5), zorder=0)
+    ax.fill_between(dhours.value, 0, 90, sun_alts_azs.alt < -18 * u.deg,
+                    color=(0, 0, 0, 0.5), zorder=0)
+
+    plt.colorbar(points, cax=cax, ax=ax, orientation='vertical')
+    ax.set_xlim(0, np.max(dt.value))
+    ax.set_xticks(np.arange(0, np.max(dt.value), 12))
+    ax.set_ylim(0, 90)
+    ax.set_xlabel(r'$\Delta \left( t - {\rm 00:00UTC} \right) \, '
+                  r'\left[ \mathrm{hr} \right]$')
+    ax.set_ylabel('Elevation [deg]')
+
+    cax.set_yticks(np.arange(0, 361, 45))
+    cax.text(0.5, 0.5, 'Azimuth [deg]', transform=cax.transAxes,
+             horizontalalignment='center', verticalalignment='center',
+             rotation=90., color='white')
+
+    ax.tick_params(which='both', axis='both', bottom=True, top=True,
+                   left=True, right=True, direction='in')
+    ax.minorticks_on()
+    cax.tick_params(which='both', axis='both', bottom=False, top=False,
+                    left=False, right=True, direction='in')
+    cax.minorticks_on()
+
+    if scan_times:
+        for start, end in scan_times:
+            dts = np.linspace((start - t0_midnight).to_value('h'),
+                              (end - t0_midnight).to_value('h'), 100)
+            dts *= u.hour
+
+            ts = t0_midnight + dts
+            frame = AltAz(obstime=ts, location=tscop_location)
+            alts_azs = coord_target.transform_to(frame)
+            ax.plot(dts.value, alts_azs.alt, ls=':', color='cyan', zorder=3)
+            ax.plot(dts[0].value, alts_azs.alt[0].value,
+                    marker='o', mec='g', mfc='lawngreen', ms=5, lw=1,
+                    zorder=3)
+            ax.plot(dts[-1].value, alts_azs.alt[-1].value,
+                    marker='o', mec='maroon', mfc='r', ms=5, lw=1,
+                    zorder=3)
+
+    if not savefig:
+        plt.show()
+    else:
+        fig.savefig(savefig, dpi=300, bbox_inches='tight')
+        plt.close()
+
+    return fig, (ax, cax)

@@ -1,32 +1,66 @@
 """
 All methods/classes related to image handling
 """
-from typing import Union
+from typing import Union, Tuple
 import numpy as np
 import numpy.typing as npt
 from ..sky_model import SkyClassType
 
 
-def calculate_spix(sky_model_type: SkyClassType) -> np.ndarray:
+def calculate_spix(data_cube: npt.ArrayLike,
+                   frequencies: npt.ArrayLike,
+                   interpolate_nans: bool = True
+                  ) -> Tuple[npt.NDArray, npt.NDArray]:
     """
     Calculate the spectral index across a SkyModel or Skycomponent instance
-    field of view
+    field of view, using standard least squares regression
 
     Parameters
     ----------
-    sky_model_type
-        SkyModel or SkyComponent
+    data_cube
+        Data cube of three dimensions (FREQ, X, Y)
+    frequencies
+        Numpy array of frequencies corresponding to 0-th axis of data-cube
+    interpolate_nans
+        Whether to interpolate spectral indices between neighbouring channels in
+        the case the least squares regression calculation fails due to negative
+        data. Default is True
 
     Returns
     -------
     Spectral indices as a 2-dimensional np.ndarray of shape
-    (sky_model_type.n_y, sky_model_type.n_x)
+    (sky_model_type.n_y, sky_model_type.n_x) and 'y-intercept' of least squares
+    fit
     """
-    spix = (np.log10(sky_model_type.data('JY/PIXEL')[0] /
-                     sky_model_type.data('JY/PIXEL')[-1]) /
-            np.log10(sky_model_type.frequencies[0] /
-                     sky_model_type.frequencies[-1]))
-    return spix
+    # spix = (np.log10(data_cube[0] / data_cube[-1]) /
+    #         np.log10(frequencies[0] / frequencies[-1]))
+
+    # LSQ regression line
+    log_data_cube = np.log10(data_cube)
+    log_frequencies = np.reshape(np.log10(frequencies),
+                                 (len(frequencies), 1, 1))
+
+    n = len(frequencies)
+    sum_xy = np.sum(log_frequencies * log_data_cube, axis=0)
+    sum_y = np.sum(log_data_cube, axis=0)
+    sum_x = np.sum(log_frequencies)
+    sum_x2 = np.sum(log_frequencies ** 2., axis=0)
+
+    c = ((sum_y * sum_x2) - sum_x * sum_xy) / (n * sum_x2 - sum_x ** 2.)
+    m = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x ** 2.)
+
+    if interpolate_nans:
+        # First interpolate between beginning/end channels
+        spix = (np.log10(data_cube[0] / data_cube[-1]) /
+                np.log10(frequencies[0] / frequencies[-1]))
+        m = np.where(np.isnan(m), spix, m)
+
+        for i in range(len(frequencies) - 1):
+            spix = (np.log10(data_cube[0] / data_cube[i + 1]) /
+                    np.log10(frequencies[0] / frequencies[i + 1]))
+            m = np.where(np.isnan(m), spix, m)
+
+    return m, c
 
 
 def crop_frac(img: np.ndarray, fracx: float, fracy: float) -> np.ndarray:
@@ -109,17 +143,20 @@ def rotate_image(image_data: np.ndarray, phi: float,
         for icol in range(0, xlen, 1):
             gx[iplan, icol, :] = np.real(np.fft.ifft(np.fft.fft(
                 impad[iplan, icol, :]) *
-                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * a)))
+                                                     np.exp(-2.j * np.pi * (
+                                                                 icol - xlen / 2) * ufreq * a)))
 
         for icol in range(0, xlen, 1):
             gyx[iplan, :, icol] = np.real(np.fft.ifft(np.fft.fft(
                 gx[iplan, :, icol]) *
-                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * b)))
+                                                      np.exp(-2.j * np.pi * (
+                                                                  icol - xlen / 2) * ufreq * b)))
 
         for icol in range(0, xlen, 1):
             gxyx[iplan, icol, :] = np.real(np.fft.ifft(np.fft.fft(
                 gyx[iplan, icol, :]) *
-                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * a)))
+                                                       np.exp(-2.j * np.pi * (
+                                                                   icol - xlen / 2) * ufreq * a)))
 
     return crop_frac(gxyx, 0.5, 0.5)
 
@@ -174,4 +211,5 @@ def deconvolve(image, psf):
     star_fft = fftpack.fftshift(fftpack.fftn(image))
     psf_fft = fftpack.fftshift(fftpack.fftn(psf))
 
-    return fftpack.fftshift(fftpack.ifftn(fftpack.ifftshift(star_fft/psf_fft)))
+    return fftpack.fftshift(
+        fftpack.ifftn(fftpack.ifftshift(star_fft / psf_fft)))

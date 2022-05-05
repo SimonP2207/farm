@@ -874,8 +874,8 @@ class SkyComponent(_BaseSkyClass):
         -------
         None if inplace=True, or SkyComponent instance if inplace=False
         """
-        self_sum_td_nu = np.nansum(self.data(unit='JY/SR'), axis=(1, 2))
-        other_sum_td_nu = np.nansum(other.data(unit='JY/SR'), axis=(1, 2))
+        self_sum_td_nu = np.nansum(self.data(unit='JY/PIXEL'), axis=(1, 2))
+        other_sum_td_nu = np.nansum(other.data(unit='JY/PIXEL'), axis=(1, 2))
 
         scalings = (other_sum_td_nu / self_sum_td_nu)[:, np.newaxis, np.newaxis]
 
@@ -886,6 +886,93 @@ class SkyComponent(_BaseSkyClass):
             new_skymodeltype = copy.deepcopy(self)
             new_skymodeltype._tb_data *= scalings
             return new_skymodeltype
+
+    def merge(self, other: SkyClassType,
+              resolution_deg: Union[None, float] = None,
+              other_resolution_deg: Union[None, float] = None,
+              new_name: Union[None, str] = None) -> SkyClassType:
+        """
+        Merge this SkyComponent with another, lower-resolution SkyComponent,
+        whilst preserving power on all scales
+
+        Parameters
+        ----------
+        other
+            Other SkyComponent instance to merge with. This should be the
+            'low-resolution' component
+        resolution_deg
+            Angular resolution of the this SkyComponent in degrees (if beam
+            information not present in .fits header)
+        other_resolution_deg
+            Angular resolution of the other SkyComponent in degrees (if beam
+            information not present in .fits header)
+        new_name
+            Name to assigned to new, merged SkyComponent instance. If None
+            (default), name will be a combination of the two SkyComponent
+            instance names
+
+        Returns
+        -------
+        New SkyComponent instance which is the power-preserving merger of the
+        two SkyComponent instances
+        """
+        from pathlib import Path
+        import scipy.constants as con
+
+        if new_name is None:
+            new_name = f"{self.name}+{other.name}"
+
+        hi_res_kl = 1. / np.radians(resolution_deg) / 1000.
+        low_res_kl = 1. / np.radians(other_resolution_deg) / 1000.
+
+        # Annulus whereby the two images must agree in the Fourier domain. Outer
+        # radius of annulus given a plus 10% buffer
+        annulus_uv_range = (low_res_kl * 0.9, low_res_kl)
+
+        # Define all image names
+        temp_id = generate_random_chars(10)
+        mir_im_self = Path(f"{self.name.replace(' ', '_')}_{temp_id}.im")
+        mir_im_other = Path(f"{other.name.replace(' ', '_')}_{temp_id}.im")
+        mir_im_merge = Path(f"{new_name.replace(' ', '_')}_{temp_id}.im")
+        fits_merge = Path(mir_im_merge.name.replace('.im', '.fits'))
+
+        self.write_miriad_image(mir_im_self, unit='JY/PIXEL')
+        other.write_miriad_image(mir_im_other, unit='JY/PIXEL')
+
+        # TODO: This fails because immerge requires beam information in both
+        #  images. This can be added via puthd with in=image.im/bmaj etc. I
+        #  suspect we will have to have fluxes in JY/BEAM for the images to be
+        #  immerged appropriately
+        miriad.puthd(_in=f"{mir_im_other}/bmaj",
+                     value=f"{other_resolution_deg:.6f},deg")
+        miriad.puthd(_in=f"{mir_im_other}/bmin",
+                     value=f"{other_resolution_deg:.6f},deg")
+        miriad.puthd(_in=f"{mir_im_other}/bpa", value=f"0,deg")
+
+        miriad.puthd(_in=f"{mir_im_self}/bmaj",
+                     value=f"{resolution_deg:.6f},deg")
+        miriad.puthd(_in=f"{mir_im_self}/bmin",
+                     value=f"{resolution_deg:.6f},deg")
+        miriad.puthd(_in=f"{mir_im_self}/bpa", value=f"0,deg")
+
+        miriad.immerge(
+            _in=f"{mir_im_self},{mir_im_other}",
+            out=str(mir_im_merge),
+            options='notaper', factor=1.0
+        )
+
+        miriad.fits(_in=str(mir_im_merge),
+                    out=str(fits_merge),
+                    op='xyout')
+
+        # Clean up temporary images
+        for im in (mir_im_merge, mir_im_self, mir_im_other):
+            shutil.rmtree(im)
+
+        new_sky_comp = SkyComponent.load_from_fits(fits_merge, new_name)
+        fits_merge.unlink()
+
+        return new_sky_comp
 
     def t_b(self, freq: tbfs.FreqType) -> tbfs.ReturnType:
         return self._tb_func(self, freq)

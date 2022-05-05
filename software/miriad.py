@@ -9,10 +9,12 @@ import re
 import subprocess
 import sys
 import warnings
+import pathlib
 
 from . import common as sfuncs
 from ..miscellaneous import error_handling as errh, decorators
 
+MIR_CHAR_LIMIT = 64
 
 if sfuncs.which('miriad') is None:
     errh.raise_error(ImportError, "miriad is not in your PATH")
@@ -37,16 +39,79 @@ def mir_func(f, thefilter):
     """Wrapper around miriad system calls"""
 
     def func(*args, **kw):
+        reformat_args = False
+        puthd = False if str(f) != 'puthd' else True
+        for k, v in kw.items():
+            if isinstance(v, pathlib.Path):
+                v = str(v)
+                kw[k] = v
+            if k in ('tin', 'out') or match_in(k):
+                if not isinstance(v, list) and ',' not in v:
+                    if len(str(v)) > MIR_CHAR_LIMIT:
+                        reformat_args = True
+                        break
+                elif isinstance(v, list):
+                    for v_ in v:
+                        if len(str(v_)) > MIR_CHAR_LIMIT:
+                            reformat_args = True
+                            break
+                elif ',' in v:
+                    for v_ in v.split(','):
+                        if len(str(v_)) > MIR_CHAR_LIMIT:
+                            reformat_args = True
+                            break
+                else:
+                    raise ValueError(f'help -> {k}={v}')
+
+        # Remove following line to implement shortened parameter inputs
+        reformat_args = False
+
+        if reformat_args and not puthd:
+            mv_dict = {}
+            ord_num = 65
+            for k, v in kw.items():
+                if isinstance(v, pathlib.Path):
+                    v = str(v)
+                if not isinstance(v, list) and ',' not in v:
+                    if k in ('tin', 'out') or match_in(k):
+                        next_path_name = chr(ord_num)
+                        ord_num += 1
+                        mv_dict[next_path_name] = v
+                        kw[k] = next_path_name
+                else:
+                    if isinstance(v, list):
+                        new_v = []
+                        for v_ in v:
+                            next_path_name = chr(ord_num)
+                            ord_num += 1
+                            mv_dict[next_path_name] = v_
+                            new_v.append(next_path_name)
+                        kw[k] = new_v
+                    elif ',' in v:
+                        new_v = []
+                        for v_ in v.split(','):
+                            next_path_name = chr(ord_num)
+                            ord_num += 1
+                            mv_dict[next_path_name] = v_
+                            new_v.append(v_)
+                        kw[k] = ','.join(new_v)
+                    else:
+                        raise ValueError(f'help -> {k}={v}')
+
+            for k, v in mv_dict.items():
+                if os.path.exists(v):
+                    os.rename(v, k)
+
         if len(args) == 1:
             kw["_in"] = args[0]
         args = to_args(kw)
 
         # SJDP added: 14/02/2022, for no-limit character-length input parameters
-        # In case any of the args have values > 80 characters long. However,
+        # In case any of the args have values > 64 characters long. However,
         # this doesn't work even though the miriad user guide says using @file
         # containing long parameter values is ok.
-        # TODO: Contact Mark Wieringa or someone at ATNF to ask why @file
-        #  containing filenames > 80 characters doesn't work
+        # TODO: Have to modify miriad's key.for file and recompile for increased
+        #  buffer sizes
         # created_param_files = []
         # for idx, arg in enumerate(args):
         #     k, v = arg.split("=")
@@ -71,7 +136,7 @@ def mir_func(f, thefilter):
         proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
-        print(' '.join([f] + args))
+        # print(' '.join([f] + args))
 
         # SJDP added: 10/02/22
         try:
@@ -100,6 +165,10 @@ def mir_func(f, thefilter):
             msg = "'%s': " % f
             msg += "\n".join(warns)
             warnings.warn(msg)
+
+        if reformat_args and not puthd:
+            for k, v in mv_dict.items():
+                os.rename(k, v)
 
         if proc.returncode != 0:
             raise MiriadError("\n".join(errors))

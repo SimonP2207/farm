@@ -4,17 +4,19 @@ All methods related to the loading of FARM configuration files
 import datetime
 import random
 from pathlib import Path
-from typing import Union, Tuple
-from dataclasses import dataclass
+from typing import Union, List, Tuple
+from dataclasses import dataclass, field
 
 import numpy as np
 import toml
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from astropy.time import Time
 
 from .. import LOGGER
 from ..miscellaneous import error_handling as errh
+from ..miscellaneous import decorators
 
 
 def check_file_exists(filename: Path) -> bool:
@@ -52,6 +54,10 @@ def check_config_validity(config_dict: dict):
                  ('directories', 'telescope_model', str),
                  ('directories', 'output_dcy', str),
                  ('observation', 'time', datetime.datetime),
+                 ('observation', 't_total', int),
+                 ('observation', 'n_scan', int),
+                 ('observation', 'min_gap_scan', int),
+                 ('observation', 'min_elevation', float),
                  ('observation', 'field', 'ra0', str),
                  ('observation', 'field', 'dec0', str),
                  ('observation', 'field', 'frame', str),
@@ -67,7 +73,12 @@ def check_config_validity(config_dict: dict):
                  ('calibration', 'noise', 'sefd_frequencies_file', str),
                  ('calibration', 'noise', 'sefd_file', str),
                  ('calibration', 'TEC', 'include', bool),
+                 ('calibration', 'TEC', 'residual_error', float),
+                 ('calibration', 'TEC', 'create', bool),
+                 ('calibration', 'TEC', 'image', list),
                  ('calibration', 'gains', 'include', bool),
+                 ('calibration', 'gains', 'phase_err', float),
+                 ('calibration', 'gains', 'amp_err', float),
                  ('calibration', 'DD-effects', 'include', bool),
                  ('sky_models', '21cm', 'include', bool),
                  ('sky_models', '21cm', 'create', bool),
@@ -137,14 +148,12 @@ def load_configuration(toml_file: Union[Path, str]) -> dict:
 
 @dataclass
 class Observation:
-    time: datetime.datetime  # start time of observation
-    duration: float  # s
-    n_scan: int  #
-    t_scan: float  # s
+    time: Time  # start time of observation
+    t_total: int  # s
+    n_scan: int  # s
+    min_gap_scan: int  # s
+    min_elevation: int
 
-    @property
-    def t_total(self):
-        return self.n_scan * self.t_scan
 
 @dataclass
 class Field:
@@ -187,43 +196,103 @@ class Correlator:
 
 
 @dataclass
-class Calibration:
-    noise: bool
-    tec: bool
-    gains: bool
-    dd_effects: bool
-    noise_seed: int = random.randint(1, 1e6)
-    sefd_freq_file: Union[str, Path] = ""
-    sefd_file: Union[str, Path] = ""
+class TEC:
+    create: bool
+    image: List[Path]
+    err: float = field(default=0.0)
 
     def __post_init__(self):
-        self.sefd_freq_file = Path(self.sefd_freq_file)
-        self.sefd_file = Path(self.sefd_file)
-        self.sefd_rms_file = None
+        if not self.create:
+            if not self.image:
+                raise ValueError(f"If not creating TEC screen, image(s) must "
+                                 f"be provided")
 
-        if self.noise:
-            if self.sefd_freq_file == "":
-                errh.raise_error(ValueError,
-                                 "sefd_freq_file not specified")
+            for idx, im in enumerate(self.image):
+                if isinstance(im, str):
+                    if im == '':
+                        raise ValueError("Empty string is not a valid image")
+                    self.image[idx] = Path(im)
 
-            if self.sefd_file == "":
-                errh.raise_error(ValueError, "sefd_file not specified")
+                if not self.image[idx].exists():
+                    raise FileNotFoundError(f"TEC image, {self.image[idx]}, not"
+                                            f" found")
+        else:
+            self.image = []
 
-            for file in (self.sefd_file, self.sefd_freq_file):
-                if not file.exists():
-                    errh.raise_error(FileNotFoundError,
-                                     f"{str(file)} doesn't exist")
+        if not 0.0 < self.err < 1.0:
+            raise ValueError(f"Invalid TEC error value given ({self.err:.3f})")
 
-                elif not file.is_file():
-                    errh.raise_error(FileNotFoundError,
-                                     f"{str(file)} is not a file")
+
+@dataclass
+class Noise:
+    seed: int
+    sefd_freq_file: Union[str, Path]
+    sefd_file: Union[str, Path]
+    sefd_rms_file: Union[Path, None] = field(default=None, init=False)
+
+    def __post_init__(self):
+        if isinstance(self.sefd_freq_file, str):
+            self.sefd_freq_file = Path(self.sefd_freq_file)
+
+        if isinstance(self.sefd_file, str):
+            self.sefd_file = Path(self.sefd_file)
+
+        if not self.sefd_freq_file.exists():
+            raise FileNotFoundError("SEFD frequencies data file, "
+                                    f"{self.sefd_freq_file}, not found")
+
+        if not self.sefd_file.exists():
+            raise FileNotFoundError(f"SEFD data file, {self.sefd_file}, not "
+                                    f"found")
+
+        if not self._valid_sefd_setup:
+            raise ValueError("SEFD data/SEFD frequencies files not compatible")
+
+    @property
+    def _valid_sefd_setup(self) -> bool:
+        freqs = np.loadtxt(self.sefd_freq_file)
+        sefds = np.loadtxt(self.sefd_file)
+
+        if len(freqs) != len(sefds):
+            return False
+
+        return True
 
     def create_sefd_rms_file(self, file_name: Path, *args, **kwargs):
         from ..calibration.noise import sefd_to_rms
 
         sefd_rms = sefd_to_rms(np.loadtxt(self.sefd_file), *args, **kwargs)
         np.savetxt(file_name, sefd_rms)
+
         self.sefd_rms_file = file_name
+
+
+@dataclass
+class Gains:
+    amp_err: float = field(default=0.0)
+    phase_err: float = field(default=0.0)
+
+    def __post_init__(self):
+        if self.amp_err < 0.0 or self.amp_err > 100.0:
+            raise ValueError(f"Invalid residual amplitude error value given "
+                             f"for gains ({self.err:.2f}). Should be "
+                             f"0 < err <= 100")
+        if self.phase_err < 0.0:
+            raise ValueError(f"Invalid residual phase error value given "
+                             f"for gains ({self.err:.2f}). Should be >= 0")
+
+
+@dataclass
+class DDEffects:
+    pass
+
+
+@dataclass
+class Calibration:
+    noise: Union[bool, Noise]
+    tec: Union[bool, TEC]
+    gains: Union[bool, Gains]
+    dd_effects: Union[bool, DDEffects]
 
 
 @dataclass
@@ -247,7 +316,9 @@ class Telescope:
     model: Path
 
     def __post_init__(self):
-        self.lat, self.lon = np.loadtxt(self.model / 'position.txt')
+        from astropy.coordinates import EarthLocation
+
+        self.lon, self.lat = np.loadtxt(self.model / 'position.txt')
 
         station_position_file = self.model / 'layout.txt'
         xs, ys, zs = np.loadtxt(station_position_file).T
@@ -265,6 +336,8 @@ class Telescope:
             self.stations[number] = Station(stations[number], station_position)
 
         self.n_stations = len(self.stations)
+        self.location = EarthLocation(lat=self.lat * u.deg,
+                                      lon=self.lon * u.deg)
 
 
 @dataclass
@@ -287,28 +360,41 @@ class SkyModelConfiguration:
 
 
 class FarmConfiguration:
+    @decorators.suppress_warnings("astropy", "erfa")
     def __init__(self, configuration_file: Path):
         self.cfg = load_configuration(configuration_file)
         self.cfg_file = configuration_file
 
-        self.root_name = Path(self.cfg["directories"]['root_name'])
+        # Directories setup
         self.output_dcy = Path(self.cfg["directories"]['output_dcy'])
+        self.root_name = self.output_dcy / self.cfg["directories"]['root_name']
 
+        # Telescope model setup
         tscp_model = Path(self.cfg["directories"]['telescope_model'])
         self.telescope = Telescope(tscp_model)
 
+        # Observational details setup
         cfg_observation = self.cfg["observation"]
-        self.observation = Observation(cfg_observation["time"],
-                                       cfg_observation["duration"],
-                                       cfg_observation["n_scan"],
-                                       cfg_observation["t_scan"])
+        # Creation of this Time instance can lead to warnings due to the date
+        # being too far in the future
+        t0 = Time(self.cfg["observation"]["time"].strftime("%Y-%m-%d %H:%M:%S"),
+                  scale='utc', location=(f'{self.telescope.lon:.5f}d',
+                                         f'{self.telescope.lat:.5f}d'))
 
+        self.observation = Observation(t0,
+                                       cfg_observation["t_total"],
+                                       cfg_observation["n_scan"],
+                                       cfg_observation["min_gap_scan"],
+                                       cfg_observation["min_elevation"])
+
+        # Observing field setup
         cfg_field = cfg_observation["field"]
         self.field = Field(cfg_field["ra0"], cfg_field["dec0"],
                            cfg_field["frame"],
                            cfg_field["nxpix"], cfg_field["nypix"],
                            cfg_field["cdelt"] / 3600.)
 
+        # Correlator setup
         cfg_correlator = cfg_observation["correlator"]
         self.correlator = Correlator(cfg_correlator["freq_min"],
                                      cfg_correlator["freq_max"],
@@ -316,24 +402,41 @@ class FarmConfiguration:
                                      cfg_correlator["chanwidth"],
                                      cfg_correlator["t_int"],)
 
+        # Calibration setup
+        noise, tec, gains, dd_effects = False, False, False, False
         cfg_calibration = self.cfg["calibration"]
-        self.calibration = Calibration(
-            noise=cfg_calibration["noise"]["include"],
-            tec=cfg_calibration["TEC"]["include"],
-            gains=cfg_calibration["gains"]["include"],
-            dd_effects=cfg_calibration["DD-effects"]["include"],
-            noise_seed=cfg_calibration["noise"]["seed"],
-            sefd_freq_file=cfg_calibration["noise"]["sefd_frequencies_file"],
-            sefd_file=cfg_calibration["noise"]["sefd_file"]
-        )
 
-        self.calibration.create_sefd_rms_file(
-            self.output_dcy / "sefd_rms.txt",
-            len(np.loadtxt(self.telescope.model / 'layout.txt')),
-            self.observation.t_total,
-            self.correlator.chan_width
-        )
+        if cfg_calibration["noise"]["include"]:
+            noise = Noise(
+                seed=cfg_calibration["noise"]["seed"],
+                sefd_freq_file=cfg_calibration["noise"]["sefd_frequencies_file"],
+                sefd_file=cfg_calibration["noise"]["sefd_file"]
+            )
+            noise.create_sefd_rms_file(
+                self.output_dcy / "sefd_rms.txt",
+                len(np.loadtxt(self.telescope.model / 'layout.txt')),
+                self.observation.t_total,
+                self.correlator.chan_width
+            )
 
+        if cfg_calibration["TEC"]["include"]:
+            tec = TEC(create=cfg_calibration["TEC"]["create"],
+                      image=cfg_calibration["TEC"]["image"],
+                      err=cfg_calibration["TEC"]["residual_error"])
+
+        if cfg_calibration["gains"]["include"]:
+            gains = Gains(amp_err=cfg_calibration["gains"]["amp_err"],
+                          phase_err=cfg_calibration["gains"]["phase_err"],)
+
+        if cfg_calibration["DD-effects"]['include']:
+            dd_effects = DDEffects()
+
+        self.calibration = Calibration(noise=noise,
+                                       tec=tec,
+                                       gains=gains,
+                                       dd_effects=dd_effects)
+
+        # Sky model setup
         cfg_sky_models = self.cfg["sky_models"]
         h21cm, ateam, gdsm, gssm, point_sources, trecs = (False, ) * 6
         if cfg_sky_models["21cm"]["include"]:
@@ -384,6 +487,9 @@ class FarmConfiguration:
             point_sources=point_sources,
             trecs=trecs,
         )
+
+        self.sky_model.image = self.output_dcy / 'sky_model.fits'
+        self.oskar_sky_model_file = self.output_dcy / 'oskar_sky_sources.data'
 
         # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
         #  DECIDE WHETHER TO WRITE AND USE AN INI FILE OR TO USE OSKAR'S

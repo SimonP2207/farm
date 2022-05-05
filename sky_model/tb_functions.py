@@ -33,9 +33,12 @@ def gdsm2016_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
     from astropy.io import fits
     from farm.miscellaneous import generate_random_chars
 
+    # NOTE: Tested data_unit='TRJ' (T_b) and data_unit='MJsysr' (I_nu) and both
+    # give same results with apropriate farm-code below
     gdsm = GlobalSkyModel2016(freq_unit='Hz', data_unit='MJysr',
                               resolution='hi')
-
+    # gdsm = GlobalSkyModel2016(freq_unit='Hz', data_unit='TRJ',
+    #                           resolution='hi')
     temp_fitsfile = pathlib.Path(f'temp{generate_random_chars(10)}.fits')
 
     gdsm.generate(freq)

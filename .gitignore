@@ -6,12 +6,12 @@
 /setup.sh
 *.def
 /*.ini
-/*.fits
-data/files/Gsynch_SKAs_original.fits
+*.fits
 data/files/gsm2016_components.h5
-data/files/obs_lightcone_8_512_single_p.fits
-data/files/sky_continuum_sdc3_v1_1.fits
+!data/files/GLEAM_EGC_v2_compact.fits
+!data/files/Gsynch_SKAs.fits
 sky_cuts.py
 testing.py
 test.py
+test2.py
 sky_modeller.py

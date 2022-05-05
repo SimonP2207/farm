@@ -2,6 +2,7 @@
 Foreground All-scale Radio Modeller (FARM)
 """
 import pathlib
+import warnings
 import logging; LOGGER = logging.getLogger(__name__)
 from . import calibration, data, miscellaneous, observing, physics, sky_model, software
 
@@ -13,3 +14,14 @@ _farm_loc = pathlib.Path(__file__).parent
 
 __version__ = (0, 0, 1)
 __all__ = ['LOGGER']
+
+
+def _append_to_pathlib_path(self, suffix):
+    return self.parent / (self.name + suffix)
+
+
+pathlib.Path.append = _append_to_pathlib_path
+
+# Disable warnings from erfa module
+logging.getLogger('erfa').setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore", module='erfa')
