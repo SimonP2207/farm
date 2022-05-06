@@ -341,7 +341,7 @@ def position_angle(
 
 
 def within_square_fov(
-        fov: tuple[float, float], ra0: float, dec0: float,
+        fov: Tuple[float, float], ra0: float, dec0: float,
         ra1: Union[float, npt.ArrayLike],
         dec1: Union[float, npt.ArrayLike]
 ) -> Union[float, npt.ArrayLike]:

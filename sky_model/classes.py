@@ -888,46 +888,49 @@ class SkyComponent(_BaseSkyClass):
             return new_skymodeltype
 
     def merge(self, other: SkyClassType,
-              resolution_deg: Union[None, float] = None,
-              other_resolution_deg: Union[None, float] = None,
-              new_name: Union[None, str] = None) -> SkyClassType:
+              beam: Union[None, Tuple[float, float, float]] = None,
+              other_beam: Union[None, Tuple[float, float, float]] = None,
+              new_name: Union[None, str] = None,
+              normalise: bool = True) -> SkyClassType:
         """
         Merge this SkyComponent with another, lower-resolution SkyComponent,
-        whilst preserving power on all scales
+        whilst preserving power on all scales. Total fluxes per channel in the
+        resultant image are normalised to the total fluxes per channel of the
+        low-resolution image if wanted
 
         Parameters
         ----------
         other
             Other SkyComponent instance to merge with. This should be the
             'low-resolution' component
-        resolution_deg
-            Angular resolution of the this SkyComponent in degrees (if beam
-            information not present in .fits header)
-        other_resolution_deg
-            Angular resolution of the other SkyComponent in degrees (if beam
-            information not present in .fits header)
+        beam
+            Beam/angular resolution of this (high-resolution) SkyComponent in
+            degrees as a 3-tuple of floats -> (bmaj, bmin, bpa). This will
+            replace any beam information. If None, ensure beam information is
+            present
+        other_beam
+            Beam/angular resolution of the other (low-resolution) SkyComponent
+            in degrees as a 3-tuple of floats -> (bmaj, bmin, bpa). This will
+            replace any beam information. If None, ensure beam information is
+            present
         new_name
             Name to assigned to new, merged SkyComponent instance. If None
             (default), name will be a combination of the two SkyComponent
             instance names
+        normalise
+            Adjust the total fluxes per channel of the resultant merged image to
+            the total fluxes per channel of the low-resolution image if True
+            (default)
 
         Returns
         -------
-        New SkyComponent instance which is the power-preserving merger of the
-        two SkyComponent instances
+        New SkyComponent instance which is the flux/power-preserving merger of
+        the two SkyComponent instances
         """
         from pathlib import Path
-        import scipy.constants as con
 
         if new_name is None:
             new_name = f"{self.name}+{other.name}"
-
-        hi_res_kl = 1. / np.radians(resolution_deg) / 1000.
-        low_res_kl = 1. / np.radians(other_resolution_deg) / 1000.
-
-        # Annulus whereby the two images must agree in the Fourier domain. Outer
-        # radius of annulus given a plus 10% buffer
-        annulus_uv_range = (low_res_kl * 0.9, low_res_kl)
 
         # Define all image names
         temp_id = generate_random_chars(10)
@@ -939,37 +942,53 @@ class SkyComponent(_BaseSkyClass):
         self.write_miriad_image(mir_im_self, unit='JY/PIXEL')
         other.write_miriad_image(mir_im_other, unit='JY/PIXEL')
 
-        # TODO: This fails because immerge requires beam information in both
-        #  images. This can be added via puthd with in=image.im/bmaj etc. I
-        #  suspect we will have to have fluxes in JY/BEAM for the images to be
-        #  immerged appropriately
-        miriad.puthd(_in=f"{mir_im_other}/bmaj",
-                     value=f"{other_resolution_deg:.6f},deg")
-        miriad.puthd(_in=f"{mir_im_other}/bmin",
-                     value=f"{other_resolution_deg:.6f},deg")
-        miriad.puthd(_in=f"{mir_im_other}/bpa", value=f"0,deg")
+        # Put beam information in fits headers for immerge if specified in args
+        if other_beam is not None:
+            miriad.puthd(_in=f"{mir_im_other}/bmaj",
+                         value=f"{other_beam[0]:.6f},deg")
+            miriad.puthd(_in=f"{mir_im_other}/bmin",
+                         value=f"{other_beam[1]:.6f},deg")
+            miriad.puthd(_in=f"{mir_im_other}/bpa",
+                         value=f"{other_beam[2]:.2f},deg")
 
-        miriad.puthd(_in=f"{mir_im_self}/bmaj",
-                     value=f"{resolution_deg:.6f},deg")
-        miriad.puthd(_in=f"{mir_im_self}/bmin",
-                     value=f"{resolution_deg:.6f},deg")
-        miriad.puthd(_in=f"{mir_im_self}/bpa", value=f"0,deg")
+        if beam is not None:
+            miriad.puthd(_in=f"{mir_im_self}/bmaj",
+                         value=f"{beam[0]:.6f},deg")
+            miriad.puthd(_in=f"{mir_im_self}/bmin",
+                         value=f"{beam[1]:.6f},deg")
+            miriad.puthd(_in=f"{mir_im_self}/bpa",
+                         value=f"{beam[2]:.2f},deg")
 
+        # Merge images in Fourier domain
         miriad.immerge(
             _in=f"{mir_im_self},{mir_im_other}",
             out=str(mir_im_merge),
             options='notaper', factor=1.0
         )
 
-        miriad.fits(_in=str(mir_im_merge),
-                    out=str(fits_merge),
-                    op='xyout')
+        miriad.fits(
+            _in=str(mir_im_merge), out=str(fits_merge), op='xyout'
+        )
 
-        # Clean up temporary images
+        # Correct merged image pixel fluxes so total flux per channel in
+        # merged image is the same as that of the low-resolution image, if
+        # desired
+        if normalise:
+            lr_total_fluxes = np.nansum(other.data('JY/PIXEL'), axis=(1, 2))
+            with fits.open(fits_merge) as hdul:
+                factor = lr_total_fluxes - np.nansum(hdul[0].data, axis=(1, 2))
+                factor /= np.product(np.shape(hdul[0].data)[-2:])
+                hdul[0].data += factor[:, np.newaxis, np.newaxis]
+                hdul.writeto(fits_merge, overwrite=True)
+
+        # Clean up temporary miriad images
         for im in (mir_im_merge, mir_im_self, mir_im_other):
             shutil.rmtree(im)
 
+        # Instantiate new SkyComponent instance to return
         new_sky_comp = SkyComponent.load_from_fits(fits_merge, new_name)
+
+        # Clean up temporary fits images
         fits_merge.unlink()
 
         return new_sky_comp
@@ -1062,6 +1081,8 @@ class SkyModel(_BaseSkyClass):
                                  f"{new_component} incompatible with sky model")
 
             self._components.append(new_component)
+
+            # NOTE: Assumption of optically-thin SkyModel and added component
             self._tb_data += ast.intensity_to_tb(
                 new_component.data(unit='JY/SR'), new_component.frequencies
             )
