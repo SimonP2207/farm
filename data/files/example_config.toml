@@ -36,13 +36,7 @@
   [calibration.TEC]
     include = true
     create = true
-    image = [
-      "/Users/simon.purser/Desktop/test_output_farm/iono_tec_0.fits",
-      "/Users/simon.purser/Desktop/test_output_farm/iono_tec_1.fits",
-      "/Users/simon.purser/Desktop/test_output_farm/iono_tec_2.fits",
-      "/Users/simon.purser/Desktop/test_output_farm/iono_tec_3.fits",
-      "/Users/simon.purser/Desktop/test_output_farm/iono_tec_4.fits"
-    ]
+    image = []
     residual_error = 0.01
   [calibration.gains]
     include = true
@@ -71,15 +65,17 @@
     create = false
     image = ""
 
-  [sky_models.PS]
+  [sky_models.EG]  # Extragalactic foregrounds
     include = true
-    create = false
-    image = ""
     flux_inner = 10.0  # flux cutoff (ceil) within fov fov_deg, Jy
     flux_outer = 10000.0  # flux cutoff (floor) beyond radius of fov_deg, Jy
+    flux_transition = 0.2  # lower flux cutoff for known sources/upper flux cutoff for T-RECS sources
 
-  [sky_models.TRECS]
-    include = true
-    create = false
-    image = ""
-    flux_inner = inf # flux upper cutoff
+    [sky_models.EG.Known]
+      include = true
+      image = ""  # fits image or table
+
+    [sky_models.EG.TRECS]
+      include = true
+      create = false
+      image = ""  # fits image or table

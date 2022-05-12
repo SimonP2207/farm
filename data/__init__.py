@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Callable
 import pandas as pd
 
+__all__ = ['loader']
 
 def _iterate_through_dict(d: dict, operation: Callable) -> dict:
     for k, v in d.items():

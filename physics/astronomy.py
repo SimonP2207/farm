@@ -437,7 +437,7 @@ def utc_range_above_elevation(
     Parameters
     ----------
     minimum_el
-        Minimum elevation of the coordinate [deg
+        Minimum elevation of the coordinate [deg]
     coord
         Coordinate of the target
     date
@@ -453,8 +453,8 @@ def utc_range_above_elevation(
     dhs = np.linspace(0, 12, 13) * u.hour
     dms = np.linspace(0, 60, 61) * u.minute
     dss = np.linspace(0, 60, 61) * u.s
-    # TODO: What if it rises/falls within an hour?
 
+    # TODO: What if it rises/falls within an hour?
     for i_h, dh in enumerate(dhs):
         el = elevation_at_utc(coord,
                               utc_max_el + dh,
@@ -493,18 +493,26 @@ def in_lst_range(lst, lst_range):
     return False
 
 
-def ha_at_utc(utc, coord, loc: Union[None, EarthLocation]):
+def ha_at_utc(utc: Time,
+              coord: SkyCoord,
+              loc: Union[None, EarthLocation]) -> Angle:
     """
+    Calculate the hour angle of a coordinate on the celestial sphere at a given
+    UTC, from a given location on the Earth
 
     Parameters
     ----------
     utc
+        Universal Time Coordinated
     coord
-    lat
+        Celestial coordinate
+    loc
+        Location on Earth, if not given within the utc, Time instance
 
     Returns
     -------
-
+    Hour angle of coordinate on sky at UTC from earth location as an astropy
+    Angle instance
     """
     if utc.location is not None:
         lst = utc.sidereal_time('apparent')

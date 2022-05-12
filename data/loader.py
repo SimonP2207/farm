@@ -4,7 +4,7 @@ All methods related to the loading of FARM configuration files
 import datetime
 import random
 from pathlib import Path
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Any
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -50,84 +50,173 @@ def check_config_validity(config_dict: dict):
         If any images specified in the sky_models configuration section do not
         exist
     """
-    structure = (('directories', 'root_name', str),
-                 ('directories', 'telescope_model', str),
-                 ('directories', 'output_dcy', str),
-                 ('observation', 'time', datetime.datetime),
-                 ('observation', 't_total', int),
-                 ('observation', 'n_scan', int),
-                 ('observation', 'min_gap_scan', int),
-                 ('observation', 'min_elevation', float),
-                 ('observation', 'field', 'ra0', str),
-                 ('observation', 'field', 'dec0', str),
-                 ('observation', 'field', 'frame', str),
-                 ('observation', 'field', 'nxpix', int),
-                 ('observation', 'field', 'nypix', int),
-                 ('observation', 'field', 'cdelt', float),
-                 ('observation', 'correlator', 'freq_min', float),
-                 ('observation', 'correlator', 'freq_max', float),
-                 ('observation', 'correlator', 'nchan', int),
-                 ('observation', 'correlator', 'chanwidth', float),
-                 ('calibration', 'noise', 'include', bool),
-                 ('calibration', 'noise', 'seed', int),
-                 ('calibration', 'noise', 'sefd_frequencies_file', str),
-                 ('calibration', 'noise', 'sefd_file', str),
-                 ('calibration', 'TEC', 'include', bool),
-                 ('calibration', 'TEC', 'residual_error', float),
-                 ('calibration', 'TEC', 'create', bool),
-                 ('calibration', 'TEC', 'image', list),
-                 ('calibration', 'gains', 'include', bool),
-                 ('calibration', 'gains', 'phase_err', float),
-                 ('calibration', 'gains', 'amp_err', float),
-                 ('calibration', 'DD-effects', 'include', bool),
-                 ('sky_models', '21cm', 'include', bool),
-                 ('sky_models', '21cm', 'create', bool),
-                 ('sky_models', '21cm', 'image', str),
-                 ('sky_models', 'A-Team', 'include', bool),
-                 ('sky_models', 'A-Team', 'demix_error', float),
-                 ('sky_models', 'GDSM', 'include', bool),
-                 ('sky_models', 'GDSM', 'create', bool),
-                 ('sky_models', 'GDSM', 'image', str),
-                 ('sky_models', 'GSSM', 'include', bool),
-                 ('sky_models', 'GSSM', 'create', bool),
-                 ('sky_models', 'GSSM', 'image', str),
-                 ('sky_models', 'PS', 'include', bool),
-                 ('sky_models', 'PS', 'create', bool),
-                 ('sky_models', 'PS', 'image', str),
-                 ('sky_models', 'PS', 'flux_inner', float),
-                 ('sky_models', 'PS', 'flux_outer', float),
-                 ('sky_models', 'TRECS', 'include', bool),
-                 ('sky_models', 'TRECS', 'create', bool),
-                 ('sky_models', 'TRECS', 'image', str),
-                 ('sky_models', 'TRECS', 'flux_inner', float))
+    @dataclass
+    class Param:
+        """Class to handle a single configuration parameter"""
+        keys: Tuple[str]
+        param_type: type
+
+        def return_val(self, dict_: dict) -> Union[Any, Exception]:
+            """Return value from a dictionary corresponding to Param instance"""
+            entry = config_dict.copy()
+
+            try:
+                for key in self.keys:
+                    entry = entry[key]
+                return entry
+
+            except Exception as e:
+                return e
+
+    structure = (
+        Param(('directories', 'root_name'), str),
+        Param(('directories', 'telescope_model'), str),
+        Param(('directories', 'output_dcy'), str),
+        Param(('observation', 'time'), datetime.datetime),
+        Param(('observation', 't_total'), int),
+        Param(('observation', 'n_scan'), int),
+        Param(('observation', 'min_gap_scan'), int),
+        Param(('observation', 'min_elevation'), float),
+        Param(('observation', 'field', 'ra0'), str),
+        Param(('observation', 'field', 'dec0'), str),
+        Param(('observation', 'field', 'frame'), str),
+        Param(('observation', 'field', 'nxpix'), int),
+        Param(('observation', 'field', 'nypix'), int),
+        Param(('observation', 'field', 'cdelt'), float),
+        Param(('observation', 'correlator', 'freq_min'), float),
+        Param(('observation', 'correlator', 'freq_max'), float),
+        Param(('observation', 'correlator', 'nchan'), int),
+        Param(('observation', 'correlator', 'chanwidth'), float),
+        Param(('calibration', 'noise', 'include'), bool),
+        Param(('calibration', 'noise', 'seed'), int),
+        Param(('calibration', 'noise', 'sefd_frequencies_file'), str),
+        Param(('calibration', 'noise', 'sefd_file'), str),
+        Param(('calibration', 'TEC', 'include'), bool),
+        Param(('calibration', 'TEC', 'residual_error'), float),
+        Param(('calibration', 'TEC', 'create'), bool),
+        Param(('calibration', 'TEC', 'image'), list),
+        Param(('calibration', 'gains', 'include'), bool),
+        Param(('calibration', 'gains', 'phase_err'), float),
+        Param(('calibration', 'gains', 'amp_err'), float),
+        Param(('calibration', 'DD-effects', 'include'), bool),
+        Param(('sky_models', '21cm', 'include'), bool),
+        Param(('sky_models', '21cm', 'create'), bool),
+        Param(('sky_models', '21cm', 'image'), str),
+        Param(('sky_models', 'A-Team', 'include'), bool),
+        Param(('sky_models', 'A-Team', 'demix_error'), float),
+        Param(('sky_models', 'GDSM', 'include'), bool),
+        Param(('sky_models', 'GDSM', 'create'), bool),
+        Param(('sky_models', 'GDSM', 'image'), str),
+        Param(('sky_models', 'GSSM', 'include'), bool),
+        Param(('sky_models', 'GSSM', 'create'), bool),
+        Param(('sky_models', 'GSSM', 'image'), str),
+        Param(('sky_models', 'EG', 'include'), bool),
+        Param(('sky_models', 'EG', 'flux_inner'), float),
+        Param(('sky_models', 'EG', 'flux_outer'), float),
+        Param(('sky_models', 'EG', 'flux_transition'), float),
+        Param(('sky_models', 'EG', 'Known', 'include'), bool),
+        Param(('sky_models', 'EG', 'Known', 'image'), str),
+        Param(('sky_models', 'EG', 'TRECS', 'include'), bool),
+        Param(('sky_models', 'EG', 'TRECS', 'create'), bool),
+        Param(('sky_models', 'EG', 'TRECS', 'image'), str)
+    )
 
     for param in structure:
-        entry = config_dict.copy()
-        for i, level in enumerate(param[:-1]):
-            try:
-                entry = entry[level]
-            except KeyError:
-                errh.raise_error(KeyError,
-                                 f"{'.'.join(param[:i + 1])} "
-                                 "not present in config")
-
-        if not isinstance(entry, param[-1]):
+        return_val = param.return_val(config_dict)
+        if isinstance(return_val, KeyError):
+            errh.raise_error(KeyError,
+                             f"{'.'.join(param.keys)} not present in config")
+        elif not isinstance(return_val, param.param_type):
             errh.raise_error(TypeError,
-                             f"{'.'.join(param[:-1])} incorrect type")
+                             f"{'.'.join(param.keys)} incorrect type. "
+                             f"{param.param_type} required but "
+                             f"{type(return_val)} provided")
 
-    for sky_model in ('21cm', 'GDSM', 'GSSM', 'PS'):
-        if config_dict["sky_models"][sky_model]["include"]:
-            # if config_dict["sky_models"][sky_model]["image"] == '':
-            #     errh.raise_error(ValueError,
-            #                      f"If including {sky_model} sky model, must "
-            #                      "specify a valid path for image")
+    existing_image_params = (
+        Param(('directories', 'telescope_model'), str),
+        Param(('directories', 'output_dcy'), str),
+        Param(('observation', 'time'), datetime.datetime),
+        Param(('observation', 't_total'), int),
+        Param(('observation', 'n_scan'), int),
+        Param(('observation', 'min_gap_scan'), int),
+        Param(('observation', 'min_elevation'), float),
+        Param(('observation', 'field', 'ra0'), str),
+        Param(('observation', 'field', 'dec0'), str),
+        Param(('observation', 'field', 'frame'), str),
+        Param(('observation', 'field', 'nxpix'), int),
+        Param(('observation', 'field', 'nypix'), int),
+        Param(('observation', 'field', 'cdelt'), float),
+        Param(('observation', 'correlator', 'freq_min'), float),
+        Param(('observation', 'correlator', 'freq_max'), float),
+        Param(('observation', 'correlator', 'nchan'), int),
+        Param(('observation', 'correlator', 'chanwidth'), float),
+        Param(('calibration', 'noise', 'include'), bool),
+        Param(('calibration', 'noise', 'seed'), int),
+        Param(('calibration', 'noise', 'sefd_frequencies_file'), str),
+        Param(('calibration', 'noise', 'sefd_file'), str),
+        Param(('calibration', 'TEC', 'include'), bool),
+        Param(('calibration', 'TEC', 'residual_error'), float),
+        Param(('calibration', 'TEC', 'create'), bool),
+        Param(('calibration', 'TEC', 'image'), list),
+        Param(('calibration', 'gains', 'include'), bool),
+        Param(('calibration', 'gains', 'phase_err'), float),
+        Param(('calibration', 'gains', 'amp_err'), float),
+        Param(('calibration', 'DD-effects', 'include'), bool),
+        Param(('sky_models', '21cm', 'include'), bool),
+        Param(('sky_models', '21cm', 'create'), bool),
+        Param(('sky_models', '21cm', 'image'), str),
+        Param(('sky_models', 'A-Team', 'include'), bool),
+        Param(('sky_models', 'A-Team', 'demix_error'), float),
+        Param(('sky_models', 'GDSM', 'include'), bool),
+        Param(('sky_models', 'GDSM', 'create'), bool),
+        Param(('sky_models', 'GDSM', 'image'), str),
+        Param(('sky_models', 'GSSM', 'include'), bool),
+        Param(('sky_models', 'GSSM', 'create'), bool),
+        Param(('sky_models', 'GSSM', 'image'), str),
+        Param(('sky_models', 'EG', 'include'), bool),
+        Param(('sky_models', 'EG', 'flux_inner'), float),
+        Param(('sky_models', 'EG', 'flux_outer'), float),
+        Param(('sky_models', 'EG', 'flux_transition'), float),
+        Param(('sky_models', 'EG', 'Known', 'include'), bool),
+        Param(('sky_models', 'EG', 'Known', 'image'), str),
+        Param(('sky_models', 'EG', 'TRECS', 'include'), bool),
+        Param(('sky_models', 'EG', 'TRECS', 'image'), str)
+    )
 
-            if not config_dict["sky_models"][sky_model]["create"]:
-                im = Path(config_dict["sky_models"][sky_model]["image"])
-                if not im.exists():
-                    err_msg = f"Using existing file, {im.__str__()}, as " \
-                              f"{sky_model} sky model, but it doesn't exist"
-                    errh.raise_error(FileNotFoundError, err_msg)
+    # Check files/directories exist that must
+    must_exist_files = []
+    if config_dict['calibration']['noise']['include']:
+        must_exist_files += (
+            config_dict['calibration']['noise']['sefd_frequencies_file'],
+            config_dict['calibration']['noise']['sefd_file']
+        )
+
+    if config_dict['calibration']['TEC']['include']:
+        if not config_dict['calibration']['TEC']['create']:
+            must_exist_files += config_dict['calibration']['TEC']['image']
+
+    if config_dict['sky_models']['21cm']['include']:
+        if not config_dict['sky_models']['21cm']['create']:
+            must_exist_files.append(config_dict['sky_models']['21cm']['image'])
+
+    if config_dict['sky_models']['GDSM']['include']:
+        if not config_dict['sky_models']['GDSM']['create']:
+            must_exist_files.append(config_dict['sky_models']['GDSM']['image'])
+
+    if config_dict['sky_models']['GSSM']['include']:
+        if not config_dict['sky_models']['GSSM']['create']:
+            must_exist_files.append(config_dict['sky_models']['GSSM']['image'])
+
+    if config_dict['sky_models']['EG']['Known']['include']:
+        must_exist_files.append(config_dict['sky_models']['EG']['Known']['image'])
+
+    if config_dict['sky_models']['EG']['Known']['include']:
+        must_exist_files.append(config_dict['sky_models']['EG']['Known']['image'])
+
+    for file in must_exist_files:
+        if not Path(file).exists() and file != "":
+            err_msg = f"{file} doesn't exist"
+            errh.raise_error(FileNotFoundError, err_msg)
 
 
 def load_configuration(toml_file: Union[Path, str]) -> dict:
@@ -344,6 +433,7 @@ class Telescope:
 class SkyComponentConfiguration:
     create: bool
     image: Union[str, Path]
+    flux_range: Tuple[float, float] = (0.0, 1e30)
     flux_inner: Union[None, float] = None
     flux_outer: Union[None, float] = None
     demix_error: Union[None, float] = None
@@ -355,8 +445,8 @@ class SkyModelConfiguration:
     ateam: Union[bool, SkyComponentConfiguration]
     gdsm: Union[bool, SkyComponentConfiguration]
     gssm: Union[bool, SkyComponentConfiguration]
-    point_sources: Union[bool, SkyComponentConfiguration]
-    trecs: Union[bool, SkyComponentConfiguration]
+    extragal_known: Union[bool, SkyComponentConfiguration]
+    extragal_trecs: Union[bool, SkyComponentConfiguration]
 
 
 class FarmConfiguration:
@@ -438,7 +528,7 @@ class FarmConfiguration:
 
         # Sky model setup
         cfg_sky_models = self.cfg["sky_models"]
-        h21cm, ateam, gdsm, gssm, point_sources, trecs = (False, ) * 6
+        h21cm, ateam, gdsm, gssm, known_sources, trecs = (False, ) * 6
         if cfg_sky_models["21cm"]["include"]:
             h21cm = SkyComponentConfiguration(
                 cfg_sky_models["21cm"]["create"],
@@ -464,31 +554,36 @@ class FarmConfiguration:
                 cfg_sky_models["GSSM"]["image"]
             )
 
-        if cfg_sky_models["PS"]["include"]:
-            point_sources = SkyComponentConfiguration(
-                cfg_sky_models["PS"]["create"],
-                cfg_sky_models["PS"]["image"],
-                cfg_sky_models["PS"]["flux_inner"],
-                cfg_sky_models["PS"]["flux_outer"]
-            )
+        if cfg_sky_models["EG"]["include"]:
+            if cfg_sky_models["EG"]["Known"]["include"]:
+                known_sources = SkyComponentConfiguration(
+                    False,
+                    cfg_sky_models["EG"]["Known"]["image"],
+                    flux_range=(cfg_sky_models["EG"]["flux_transition"], 1e30),
+                    flux_inner=cfg_sky_models["EG"]["flux_inner"],
+                    flux_outer=cfg_sky_models["EG"]["flux_outer"]
+                )
 
-        if cfg_sky_models["TRECS"]["include"]:
-            trecs = SkyComponentConfiguration(
-                cfg_sky_models["TRECS"]["create"],
-                cfg_sky_models["TRECS"]["image"],
-                cfg_sky_models["TRECS"]["flux_inner"],
-            )
+            if cfg_sky_models["EG"]["TRECS"]["include"]:
+                trecs = SkyComponentConfiguration(
+                    cfg_sky_models["EG"]["TRECS"]["create"],
+                    cfg_sky_models["EG"]["TRECS"]["image"],
+                    flux_range=(0., cfg_sky_models["EG"]["flux_transition"]),
+                    flux_inner=cfg_sky_models["EG"]["flux_inner"],
+                    flux_outer=cfg_sky_models["EG"]["flux_outer"]
+                )
 
         self.sky_model = SkyModelConfiguration(
             h21cm=h21cm,
             ateam=ateam,
             gdsm=gdsm,
             gssm=gssm,
-            point_sources=point_sources,
-            trecs=trecs,
+            extragal_known=known_sources,
+            extragal_trecs=trecs,
         )
 
-        self.sky_model.image = self.output_dcy / 'sky_model.fits'
+        self.sky_model.image = (self.output_dcy /
+                                f'{self.root_name}_sky_model.fits')
         self.oskar_sky_model_file = self.output_dcy / 'oskar_sky_sources.data'
 
         # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
@@ -498,4 +593,3 @@ class FarmConfiguration:
         self.oskar_sim_interferometer_settings = oskar.SettingsTree(
             'oskar_sim_interferometer'
         )
-
