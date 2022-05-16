@@ -376,82 +376,85 @@ if cfg.sky_model.extragalactic.real_component:
                          "Currently can only load model from fits")
     else:
         if cfg.sky_model.extragalactic.real_component.image == "":
-            # TODO: Refactor all of the below code into sensible function(s)
-            # Parse .fits table data
-            LOGGER.info("Loading GLEAM catalogue")
             catalogue = farm.data.FILES['TABLES']['GLEAM']
-            data = farm.data.fits_table_to_dataframe(catalogue)
-
-            # Column name translation of GLEAM_EGC_v2.fits
-            sky_model_cols = {'ra': 'RAJ2000', 'dec': 'DEJ2000',
-                              'fluxI': 'int_flux_wide',
-                              'freq0': 'freq0', 'spix': 'alpha',
-                              'maj': 'a_wide', 'min': 'b_wide',
-                              'pa': 'pa_wide'}
-
-            # Add needed columns to DataFrame
-            # TODO: Put hard-coded, generic spectral-index of -0.7 somewhere
-            #  sensible
-            data[sky_model_cols['spix']] = np.where(np.isnan(data.alpha),
-                                                    -0.7, data.alpha)
-            data['freq0'] = 200e6  # GLEAM reference frequency
-
-            # Create source masks for field of view and side lobes
-            data['_fov'] = ast.within_square_fov(
-                cfg.field.fov, cfg.field.coord0.ra.deg,
-                cfg.field.coord0.dec.deg,
-                data[sky_model_cols['ra']], data[sky_model_cols['dec']]
-            )
-
-            mask_fov = (
-                data['_fov'] &
-                (data[sky_model_cols['fluxI']] <
-                 cfg.sky_model.extragalactic.real_component.flux_inner)
-            )
-
-            mask_side_lobes = (data[sky_model_cols['fluxI']] >
-                               cfg.sky_model.extragalactic.real_component.flux_outer)
-
-            flux_range_mask = ((cfg.sky_model.extragalactic.real_component.flux_transition <
-                                data[sky_model_cols['fluxI']]) &
-                               (data[sky_model_cols['fluxI']] < 1e30))
-
-            # Mask source outside of designated flux range
-            mask_fov = mask_fov & flux_range_mask
-            mask_side_lobes = mask_side_lobes & flux_range_mask
-
-            # Create SkyComponent instance and save .fits image of GLEAM
-            # sources
-            ps = farm.sky_model.SkyComponent.load_from_fits_table(
-                sky_model_cols, catalogue, 'GLEAM', cfg.field.cdelt,
-                cfg.field.coord0, fov=cfg.field.fov,
-                freqs=cfg.correlator.frequencies,
-                beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
-            )
-
-            sky_model.add_component(ps)
-
-            if not model_only:
-                # Add to fov Sky instance
-                oskar.add_dataframe_to_sky(data[mask_fov],
-                                           sky_fov,
-                                           sky_model_cols)
-
-                # Add to side-lobes Sky instance
-                oskar.add_dataframe_to_sky(data[mask_side_lobes],
-                                           sky_side_lobes,
-                                           sky_model_cols)
-
-        elif not cfg.sky_model.extragal_known.image.exists():
+        elif cfg.sky_model.extragalactic.real_component.image.exists():
+            catalogue = cfg.sky_model.extragalactic.real_component.image
+        elif not cfg.sky_model.extragalactic.real_component.image.exists():
             errh.raise_error(
                 FileNotFoundError,
-                f"{str(cfg.sky_model.extragal_known.image)} does not exist"
+                f"{str(cfg.sky_model.extragalactic.real_component.image)} "
+                f"does not exist"
             )
         else:
             errh.raise_error(
                 NotImplementedError,
-                "Currently can only load GLEAM model from fits table"
-            )
+                "Currently can only load GLEAM model from fits table")
+        # TODO: Refactor all of the below code into sensible function(s)
+        # Parse .fits table data
+        LOGGER.info("Loading GLEAM catalogue")
+
+        data = farm.data.fits_table_to_dataframe(catalogue)
+
+        # Column name translation of GLEAM_EGC_v2.fits
+        sky_model_cols = {'ra': 'RAJ2000', 'dec': 'DEJ2000',
+                          'fluxI': 'int_flux_wide',
+                          'freq0': 'freq0', 'spix': 'alpha',
+                          'maj': 'a_wide', 'min': 'b_wide',
+                          'pa': 'pa_wide'}
+
+        # Add needed columns to DataFrame
+        # TODO: Put hard-coded, generic spectral-index of -0.7 somewhere
+        #  sensible
+        data[sky_model_cols['spix']] = np.where(np.isnan(data.alpha),
+                                                -0.7, data.alpha)
+        data['freq0'] = 200e6  # GLEAM reference frequency
+
+        # Create source masks for field of view and side lobes
+        data['_fov'] = ast.within_square_fov(
+            cfg.field.fov, cfg.field.coord0.ra.deg,
+            cfg.field.coord0.dec.deg,
+            data[sky_model_cols['ra']], data[sky_model_cols['dec']]
+        )
+
+        mask_fov = (
+            data['_fov'] &
+            (data[sky_model_cols['fluxI']] <
+             cfg.sky_model.extragalactic.real_component.flux_inner)
+        )
+
+        mask_side_lobes = (data[sky_model_cols['fluxI']] >
+                           cfg.sky_model.extragalactic.real_component.flux_outer)
+
+        flux_range_mask = ((cfg.sky_model.extragalactic.real_component.flux_transition <
+                            data[sky_model_cols['fluxI']]) &
+                           (data[sky_model_cols['fluxI']] < 1e30))
+
+        # Mask source outside of designated flux range
+        mask_fov = mask_fov & flux_range_mask
+        mask_side_lobes = mask_side_lobes & flux_range_mask
+
+        # Create SkyComponent instance and save .fits image of GLEAM
+        # sources
+        ps = farm.sky_model.SkyComponent.load_from_fits_table(
+            sky_model_cols, catalogue, 'GLEAM', cfg.field.cdelt,
+            cfg.field.coord0, fov=cfg.field.fov,
+            freqs=cfg.correlator.frequencies,
+            beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
+        )
+
+        sky_model.add_component(ps)
+
+        if not model_only:
+            # Add to fov Sky instance
+            oskar.add_dataframe_to_sky(data[mask_fov],
+                                       sky_fov,
+                                       sky_model_cols)
+
+            # Add to side-lobes Sky instance
+            oskar.add_dataframe_to_sky(data[mask_side_lobes],
+                                       sky_side_lobes,
+                                       sky_model_cols)
+
 else:
     LOGGER.info("Not including known point sources into foreground")
 # ############################################################################ #
