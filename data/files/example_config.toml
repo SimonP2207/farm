@@ -47,26 +47,30 @@
 
 [sky_models]
   [sky_models.21cm]
-    include = false
-    create = true
-    image = ""
+    include = true
+    create = false
+    image = "/Users/simon.purser/pylib/farm/data/files/obs_lightcone_8_512_single_p.fits"
 
   [sky_models.A-Team]
     include = true
     demix_error = 0.001  # Factor of imperfect demixing of A-team sources
 
-  [sky_models.GDSM]
+  [sky_models.Galactic]
     include = true
-    create = true
     image = ""
+    [sky_models.Galactic.LargeScale]
+      include = true
+      create = true
+      image = ""
 
-  [sky_models.GSSM]
-    include = true
-    create = false
-    image = ""
+  [sky_models.Galactic.SmallScale]
+      include = false
+      create = false
+      image = ""
 
   [sky_models.EG]  # Extragalactic foregrounds
     include = true
+    image = ""
     flux_inner = 10.0  # flux cutoff (ceil) within fov fov_deg, Jy
     flux_outer = 10000.0  # flux cutoff (floor) beyond radius of fov_deg, Jy
     flux_transition = 0.2  # lower flux cutoff for known sources/upper flux cutoff for T-RECS sources

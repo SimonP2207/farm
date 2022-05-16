@@ -198,8 +198,8 @@ class _BaseSkyClass(ABC):
         from ..miscellaneous import image_functions as imfunc
 
         # Set up fits header, WCS and data array
-        im_hdr = hdr3d(int(fov[0] // cdelt) + 1,
-                       int(fov[1] // cdelt) + 1,
+        im_hdr = hdr3d(int(fov[0] // cdelt),
+                       int(fov[1] // cdelt),
                        coord0, cdelt, freqs, 'fk5')
         im_hdr.insert('CUNIT3', ('BUNIT', 'JY/PIXEL'), after=True)
         im_wcs = wcs.WCS(im_hdr)

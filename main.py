@@ -259,8 +259,8 @@ if not model_only:
 # ################## Large-scale Galactic foreground model ################### #
 # ############################################################################ #
 gdsm = None
-if cfg.sky_model.gdsm:
-    if cfg.sky_model.gdsm.create:
+if cfg.sky_model.galactic.large_scale_component.include:
+    if cfg.sky_model.galactic.large_scale_component.create:
         LOGGER.info("Creating large-scale Galactic foreground images")
         gdsm = farm.sky_model.SkyComponent(
             name='GDSM',
@@ -282,27 +282,30 @@ if cfg.sky_model.gdsm:
     # In the case that the small-scale Galactic emission is not included in
     # the SkyModel, add the large-scale emission component alone to the
     # SkyModel
-    if not cfg.sky_model.gssm:
+    if not cfg.sky_model.galactic.small_scale_component:
         sky_model.add_component(gdsm)
+    else:
+        gdsm.write_fits(cfg.output_dcy / f"{gdsm.name}_component.fits",
+                        unit='JY/PIXEL')
 else:
     LOGGER.info("Not including large-scale Galactic component")
 # ############################################################################ #
 # ################ Small-scale Galactic foreground model ##################### #
 # ############################################################################ #
 gssm = None
-if cfg.sky_model.gssm:
+if cfg.sky_model.galactic.small_scale_component:
     fits_gssm = None
-    if cfg.sky_model.gssm.create:
+    if cfg.sky_model.galactic.small_scale_component.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load GSSM model from fits")
     else:
-        if cfg.sky_model.gssm.image == "":
+        if cfg.sky_model.galactic.small_scale_component.image == "":
             fits_gssm = farm.data.FILES['IMAGES']['MHD']
-        elif cfg.sky_model.gssm.image.exists():
-            fits_gssm = cfg.sky_model.gssm.image
+        elif cfg.sky_model.galactic.small_scale_component.image.exists():
+            fits_gssm = cfg.sky_model.galactic.small_scale_component.image
         else:
             errh.raise_error(FileNotFoundError,
-                             f"{cfg.sky_model.gssm.image} does not exist")
+                             f"{cfg.sky_model.galactic.small_scale_component.image} does not exist")
         LOGGER.info(f"Loading Galactic small-scale component from "
                     f"{fits_gssm}")
 
@@ -322,7 +325,7 @@ if cfg.sky_model.gssm:
                 f"{np.degrees(rot_angle):.1f}deg")
     gssm.rotate(angle=rot_angle, inplace=True)
 
-    if cfg.sky_model.gdsm:
+    if cfg.sky_model.galactic.large_scale_component:
         LOGGER.info("Regridding small-scale images to large-scale parent")
         gssm = gssm.regrid(gdsm)
 
@@ -331,8 +334,9 @@ if cfg.sky_model.gssm:
 
         merged = gssm.merge(gdsm, (gssm.cdelt, gssm.cdelt, 0.),
                             (56. / 60., 56. / 60., 0.), 'GASM')
-
         sky_model.add_component(merged)
+        gssm.write_fits(cfg.output_dcy / f"{gssm.name}_component.fits",
+                        unit='JY/PIXEL')
     else:
         sky_model.add_component(gssm)
 else:
@@ -365,13 +369,13 @@ else:
 # Also, separate sky model for in-fov and out-fov sources with flux cutoff
 # for each
 ps = None
-if cfg.sky_model.extragal_known:
+if cfg.sky_model.extragalactic.real_component:
     LOGGER.info("Incorporating known point sources into foreground model")
-    if cfg.sky_model.extragal_known.create:
+    if cfg.sky_model.extragalactic.real_component.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load model from fits")
     else:
-        if cfg.sky_model.extragal_known.image == "":
+        if cfg.sky_model.extragalactic.real_component.image == "":
             # TODO: Refactor all of the below code into sensible function(s)
             # Parse .fits table data
             LOGGER.info("Loading GLEAM catalogue")
@@ -402,16 +406,15 @@ if cfg.sky_model.extragal_known:
             mask_fov = (
                 data['_fov'] &
                 (data[sky_model_cols['fluxI']] <
-                 cfg.sky_model.extragal_known.flux_inner)
+                 cfg.sky_model.extragalactic.real_component.flux_inner)
             )
 
             mask_side_lobes = (data[sky_model_cols['fluxI']] >
-                               cfg.sky_model.extragal_known.flux_outer)
+                               cfg.sky_model.extragalactic.real_component.flux_outer)
 
-            flux_range_mask = ((cfg.sky_model.extragal_known.flux_range[0] <
+            flux_range_mask = ((cfg.sky_model.extragalactic.real_component.flux_transition <
                                 data[sky_model_cols['fluxI']]) &
-                               (data[sky_model_cols['fluxI']] <
-                                cfg.sky_model.extragal_known.flux_range[1]))
+                               (data[sky_model_cols['fluxI']] < 1e30))
 
             # Mask source outside of designated flux range
             mask_fov = mask_fov & flux_range_mask
@@ -426,8 +429,7 @@ if cfg.sky_model.extragal_known:
                 beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
             )
 
-            ps.write_fits(cfg.output_dcy / f"{ps.name}_component.fits",
-                          unit='JY/PIXEL')
+            sky_model.add_component(ps)
 
             if not model_only:
                 # Add to fov Sky instance
@@ -456,21 +458,21 @@ else:
 # ###################### Simulated sources from T-RECs ####################### #
 # ############################################################################ #
 trecs_sources = None
-if cfg.sky_model.extragal_trecs:
+if cfg.sky_model.extragalactic.artifical_component.include:
     LOGGER.info("Incorporating T-RECS artificial sources into low-SNR "
                 "extragalactic foreground component")
     fits_trecs = None
-    if cfg.sky_model.extragal_trecs.create:
+    if cfg.sky_model.extragalactic.artifical_component.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load model from fits")
     else:
-        if cfg.sky_model.extragal_trecs.image == "":
+        if cfg.sky_model.extragalactic.artifical_component.image == "":
             fits_trecs = farm.data.FILES['IMAGES']['TRECS']
-        elif cfg.sky_model.extragal_trecs.image.exists():
-            fits_trecs = cfg.sky_model.extragal_trecs.image
+        elif cfg.sky_model.extragalactic.artifical_component.image.exists():
+            fits_trecs = cfg.sky_model.extragalactic.artifical_component.image
         else:
             errh.raise_error(FileNotFoundError,
-                             f"{str(cfg.sky_model.extragal_trecs.image)} "
+                             f"{str(cfg.sky_model.extragalactic.artifical_component.image)} "
                              "does not exist")
     # Parse .fits table data
     # TODO: Conditional here as to whether to load from the fits
@@ -487,6 +489,7 @@ if cfg.sky_model.extragal_trecs:
 
     trecs = trecs.regrid(gdsm)
     sky_model.add_component(trecs)
+
 else:
     LOGGER.info("Not including T-RECS sources into foreground")
 # ############################################################################ #
@@ -495,12 +498,11 @@ else:
 h21cm = None
 if cfg.sky_model.h21cm:
     LOGGER.info("Including EoR 21cm signal into sky model")
-    fits_h21cm = None
     if cfg.sky_model.h21cm.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load model from fits")
     else:
-        if cfg.sky_model.extragal_known.image == "":
+        if cfg.sky_model.h21cm.image == "":
             fits_h21cm = farm.data.FILES['IMAGES']['H21CM']
         elif cfg.sky_model.h21cm.image.exists():
             fits_h21cm = cfg.sky_model.h21cm.image

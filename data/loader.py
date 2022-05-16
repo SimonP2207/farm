@@ -104,13 +104,14 @@ def check_config_validity(config_dict: dict):
         Param(('sky_models', '21cm', 'image'), str),
         Param(('sky_models', 'A-Team', 'include'), bool),
         Param(('sky_models', 'A-Team', 'demix_error'), float),
-        Param(('sky_models', 'GDSM', 'include'), bool),
-        Param(('sky_models', 'GDSM', 'create'), bool),
-        Param(('sky_models', 'GDSM', 'image'), str),
-        Param(('sky_models', 'GSSM', 'include'), bool),
-        Param(('sky_models', 'GSSM', 'create'), bool),
-        Param(('sky_models', 'GSSM', 'image'), str),
+        Param(('sky_models', 'Galactic', 'LargeScale', 'include'), bool),
+        Param(('sky_models', 'Galactic', 'LargeScale', 'create'), bool),
+        Param(('sky_models', 'Galactic', 'LargeScale', 'image'), str),
+        Param(('sky_models', 'Galactic', 'SmallScale', 'include'), bool),
+        Param(('sky_models', 'Galactic', 'SmallScale', 'create'), bool),
+        Param(('sky_models', 'Galactic', 'SmallScale', 'image'), str),
         Param(('sky_models', 'EG', 'include'), bool),
+        Param(('sky_models', 'EG', 'image'), str),
         Param(('sky_models', 'EG', 'flux_inner'), float),
         Param(('sky_models', 'EG', 'flux_outer'), float),
         Param(('sky_models', 'EG', 'flux_transition'), float),
@@ -132,57 +133,6 @@ def check_config_validity(config_dict: dict):
                              f"{param.param_type} required but "
                              f"{type(return_val)} provided")
 
-    existing_image_params = (
-        Param(('directories', 'telescope_model'), str),
-        Param(('directories', 'output_dcy'), str),
-        Param(('observation', 'time'), datetime.datetime),
-        Param(('observation', 't_total'), int),
-        Param(('observation', 'n_scan'), int),
-        Param(('observation', 'min_gap_scan'), int),
-        Param(('observation', 'min_elevation'), float),
-        Param(('observation', 'field', 'ra0'), str),
-        Param(('observation', 'field', 'dec0'), str),
-        Param(('observation', 'field', 'frame'), str),
-        Param(('observation', 'field', 'nxpix'), int),
-        Param(('observation', 'field', 'nypix'), int),
-        Param(('observation', 'field', 'cdelt'), float),
-        Param(('observation', 'correlator', 'freq_min'), float),
-        Param(('observation', 'correlator', 'freq_max'), float),
-        Param(('observation', 'correlator', 'nchan'), int),
-        Param(('observation', 'correlator', 'chanwidth'), float),
-        Param(('calibration', 'noise', 'include'), bool),
-        Param(('calibration', 'noise', 'seed'), int),
-        Param(('calibration', 'noise', 'sefd_frequencies_file'), str),
-        Param(('calibration', 'noise', 'sefd_file'), str),
-        Param(('calibration', 'TEC', 'include'), bool),
-        Param(('calibration', 'TEC', 'residual_error'), float),
-        Param(('calibration', 'TEC', 'create'), bool),
-        Param(('calibration', 'TEC', 'image'), list),
-        Param(('calibration', 'gains', 'include'), bool),
-        Param(('calibration', 'gains', 'phase_err'), float),
-        Param(('calibration', 'gains', 'amp_err'), float),
-        Param(('calibration', 'DD-effects', 'include'), bool),
-        Param(('sky_models', '21cm', 'include'), bool),
-        Param(('sky_models', '21cm', 'create'), bool),
-        Param(('sky_models', '21cm', 'image'), str),
-        Param(('sky_models', 'A-Team', 'include'), bool),
-        Param(('sky_models', 'A-Team', 'demix_error'), float),
-        Param(('sky_models', 'GDSM', 'include'), bool),
-        Param(('sky_models', 'GDSM', 'create'), bool),
-        Param(('sky_models', 'GDSM', 'image'), str),
-        Param(('sky_models', 'GSSM', 'include'), bool),
-        Param(('sky_models', 'GSSM', 'create'), bool),
-        Param(('sky_models', 'GSSM', 'image'), str),
-        Param(('sky_models', 'EG', 'include'), bool),
-        Param(('sky_models', 'EG', 'flux_inner'), float),
-        Param(('sky_models', 'EG', 'flux_outer'), float),
-        Param(('sky_models', 'EG', 'flux_transition'), float),
-        Param(('sky_models', 'EG', 'Known', 'include'), bool),
-        Param(('sky_models', 'EG', 'Known', 'image'), str),
-        Param(('sky_models', 'EG', 'TRECS', 'include'), bool),
-        Param(('sky_models', 'EG', 'TRECS', 'image'), str)
-    )
-
     # Check files/directories exist that must
     must_exist_files = []
     if config_dict['calibration']['noise']['include']:
@@ -199,13 +149,13 @@ def check_config_validity(config_dict: dict):
         if not config_dict['sky_models']['21cm']['create']:
             must_exist_files.append(config_dict['sky_models']['21cm']['image'])
 
-    if config_dict['sky_models']['GDSM']['include']:
-        if not config_dict['sky_models']['GDSM']['create']:
-            must_exist_files.append(config_dict['sky_models']['GDSM']['image'])
+    if config_dict['sky_models']['Galactic']['LargeScale']['include']:
+        if not config_dict['sky_models']['Galactic']['LargeScale']['create']:
+            must_exist_files.append(config_dict['sky_models']['Galactic']['LargeScale']['image'])
 
-    if config_dict['sky_models']['GSSM']['include']:
-        if not config_dict['sky_models']['GSSM']['create']:
-            must_exist_files.append(config_dict['sky_models']['GSSM']['image'])
+    if config_dict['sky_models']['Galactic']['SmallScale']['include']:
+        if not config_dict['sky_models']['Galactic']['SmallScale']['create']:
+            must_exist_files.append(config_dict['sky_models']['Galactic']['SmallScale']['image'])
 
     if config_dict['sky_models']['EG']['Known']['include']:
         must_exist_files.append(config_dict['sky_models']['EG']['Known']['image'])
@@ -438,6 +388,45 @@ class SkyComponentConfiguration:
     flux_outer: Union[None, float] = None
     demix_error: Union[None, float] = None
 
+@dataclass
+class SkyComponentConfiguration:
+    include: bool
+    image: Union[str, Path]
+
+    def __post_init__(self):
+        if isinstance(self.image, str) and self.image != "":
+            self.image = Path(self.image)
+
+@dataclass
+class EoR21cmConfiguration(SkyComponentConfiguration):
+    create: bool
+
+@dataclass
+class ATeamConfiguration(SkyComponentConfiguration):
+    demix_error: float
+
+
+@dataclass
+class ExtragalacticComponentConfiguration(SkyComponentConfiguration):
+    create: bool
+    flux_inner: float
+    flux_outer: float
+    flux_transition: float
+
+@dataclass
+class ExtragalacticConfiguration(SkyComponentConfiguration):
+    real_component: Union[ExtragalacticComponentConfiguration, None]
+    artifical_component: Union[ExtragalacticComponentConfiguration, None]
+
+@dataclass
+class GalacticComponentConfiguration(SkyComponentConfiguration):
+    create: bool
+
+@dataclass
+class GalacticConfiguration(SkyComponentConfiguration):
+    large_scale_component: Union[GalacticComponentConfiguration, None]
+    small_scale_component: Union[GalacticComponentConfiguration, None]
+
 
 @dataclass
 class SkyModelConfiguration:
@@ -447,6 +436,14 @@ class SkyModelConfiguration:
     gssm: Union[bool, SkyComponentConfiguration]
     extragal_known: Union[bool, SkyComponentConfiguration]
     extragal_trecs: Union[bool, SkyComponentConfiguration]
+
+@dataclass
+class SkyModelConfiguration:
+    h21cm: Union[bool, EoR21cmConfiguration]
+    ateam: Union[bool, ATeamConfiguration]
+    galactic: Union[bool, GalacticConfiguration]
+    extragalactic: Union[bool, ExtragalacticConfiguration]
+
 
 
 class FarmConfiguration:
@@ -528,58 +525,76 @@ class FarmConfiguration:
 
         # Sky model setup
         cfg_sky_models = self.cfg["sky_models"]
-        h21cm, ateam, gdsm, gssm, known_sources, trecs = (False, ) * 6
+        h21cm, ateam, galactic, extragalactic = (False, ) * 4
+        gdsm, gssm, known_sources, trecs = (False, ) * 4
         if cfg_sky_models["21cm"]["include"]:
-            h21cm = SkyComponentConfiguration(
-                cfg_sky_models["21cm"]["create"],
-                cfg_sky_models["21cm"]["image"]
+            h21cm = EoR21cmConfiguration(
+                include=cfg_sky_models["21cm"]["include"],
+                image=cfg_sky_models["21cm"]["image"],
+                create=cfg_sky_models["21cm"]["create"]
             )
 
         if cfg_sky_models["A-Team"]["include"]:
-            ateam = SkyComponentConfiguration(
-                create=False,
+            ateam = ATeamConfiguration(
+                cfg_sky_models["A-Team"]["include"],
                 image="",
                 demix_error=cfg_sky_models["A-Team"]["demix_error"]
             )
 
-        if cfg_sky_models["GDSM"]["include"]:
-            gdsm = SkyComponentConfiguration(
-                cfg_sky_models["GDSM"]["create"],
-                cfg_sky_models["GDSM"]["image"]
+        if cfg_sky_models['Galactic']['LargeScale']["include"]:
+            gdsm = GalacticComponentConfiguration(
+                cfg_sky_models['Galactic']['LargeScale']["include"],
+                cfg_sky_models['Galactic']['LargeScale']["image"],
+                cfg_sky_models['Galactic']['LargeScale']["create"]
             )
 
-        if cfg_sky_models["GSSM"]["include"]:
-            gssm = SkyComponentConfiguration(
-                cfg_sky_models["GSSM"]["create"],
-                cfg_sky_models["GSSM"]["image"]
+        if cfg_sky_models['Galactic']["SmallScale"]["include"]:
+            gssm = GalacticComponentConfiguration(
+                cfg_sky_models['Galactic']['SmallScale']["include"],
+                cfg_sky_models['Galactic']['SmallScale']["image"],
+                cfg_sky_models['Galactic']['SmallScale']["create"]
+            )
+
+        if cfg_sky_models['Galactic']['include']:
+            galactic = GalacticConfiguration(
+                cfg_sky_models['Galactic']["include"],
+                cfg_sky_models['Galactic']["image"],
+                gdsm if gdsm else None,
+                gssm if gssm else None
             )
 
         if cfg_sky_models["EG"]["include"]:
             if cfg_sky_models["EG"]["Known"]["include"]:
-                known_sources = SkyComponentConfiguration(
-                    False,
+                known_sources = ExtragalacticComponentConfiguration(
+                    cfg_sky_models["EG"]["Known"]["include"],
                     cfg_sky_models["EG"]["Known"]["image"],
-                    flux_range=(cfg_sky_models["EG"]["flux_transition"], 1e30),
+                    False,
                     flux_inner=cfg_sky_models["EG"]["flux_inner"],
-                    flux_outer=cfg_sky_models["EG"]["flux_outer"]
+                    flux_outer=cfg_sky_models["EG"]["flux_outer"],
+                    flux_transition=cfg_sky_models["EG"]["flux_transition"]
                 )
 
             if cfg_sky_models["EG"]["TRECS"]["include"]:
-                trecs = SkyComponentConfiguration(
-                    cfg_sky_models["EG"]["TRECS"]["create"],
+                trecs = ExtragalacticComponentConfiguration(
+                    cfg_sky_models["EG"]["TRECS"]["include"],
                     cfg_sky_models["EG"]["TRECS"]["image"],
-                    flux_range=(0., cfg_sky_models["EG"]["flux_transition"]),
-                    flux_inner=cfg_sky_models["EG"]["flux_inner"],
-                    flux_outer=cfg_sky_models["EG"]["flux_outer"]
+                    cfg_sky_models["EG"]["TRECS"]["create"],
+                    flux_inner=1e30,
+                    flux_outer=-1e30,
+                    flux_transition=cfg_sky_models["EG"]["flux_transition"]
                 )
+            extragalactic = ExtragalacticConfiguration(
+                cfg_sky_models["EG"]["include"],
+                cfg_sky_models["EG"]["image"],
+                real_component=known_sources,
+                artifical_component=trecs
+            )
 
         self.sky_model = SkyModelConfiguration(
             h21cm=h21cm,
             ateam=ateam,
-            gdsm=gdsm,
-            gssm=gssm,
-            extragal_known=known_sources,
-            extragal_trecs=trecs,
+            galactic=galactic,
+            extragalactic=extragalactic,
         )
 
         self.sky_model.image = (self.output_dcy /
