@@ -6,7 +6,6 @@ import numpy as np
 import numpy.typing as npt
 from ..sky_model import SkyClassType
 
-
 def calculate_spix(data_cube: npt.ArrayLike,
                    frequencies: npt.ArrayLike,
                    interpolate_nans: bool = True
@@ -170,13 +169,13 @@ def gaussian_2d(x: Union[float, npt.ArrayLike], y: Union[float, npt.ArrayLike],
     Parameters
     ----------
     x
-        x/right ascension-coordinate(s) [deg]
+        Right ascension-coordinate(s) [deg]
     y
-        y/declination-coordinate(s) [deg]
+        Declination-coordinate(s) [deg]
     x0
-        Peak x/right ascension-coordinate [deg]
+        Peak right ascension-coordinate [deg]
     y0
-        Peak y/declination-coordinate [deg]
+        Peak declination-coordinate [deg]
     peak
         Peak intensity value [Jy/pixel]
     major

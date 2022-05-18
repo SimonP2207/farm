@@ -6,6 +6,9 @@ from typing import Union
 import numpy as np
 import numpy.typing as npt
 
+__all__ = ['decorators', 'error_handling', 'fits', 'image_functions',
+           'plotting']
+
 
 def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
     """

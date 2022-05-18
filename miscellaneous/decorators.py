@@ -1,7 +1,8 @@
 """
 Any and all decorator definitions should be placed in this module
 """
-import time
+import inspect
+from functools import wraps
 import logging
 import warnings
 from typing import Callable, Any
@@ -9,11 +10,34 @@ from typing import Callable, Any
 from .error_handling import issue_warning, raise_error
 
 
+def ensure_is_fits(*files):
+    """Ensure the listed arguments are fits files"""
+    def decorator(func):
+        """decorator function"""
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            """wrapper function"""
+            from . import fits
+            argspec = inspect.getfullargspec(func)
+            for f in files:
+                if argspec.kwonlyargs and f in argspec.kwonlyargs:
+                    val = kwargs[f]
+                else:
+                    val = args[argspec.args.index(f)]
+                if not fits.is_fits(val):
+                    raise TypeError(f"{val} not a .fits file")
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def docstring_parameter(*sub):
-    def dec(obj):
+    """Insert values into object documentation"""
+    def wrapper(obj):
+        """wrapper function"""
         obj.__doc__ = obj.__doc__.format(*sub)
         return obj
-    return dec
+    return wrapper
 
 
 def log_errors_warnings(function):
@@ -21,6 +45,7 @@ def log_errors_warnings(function):
     Decorator for logging and raising errors/warnings issued during method calls
     """
     def wrapper(*args, **kwargs):
+        """wrapper function"""
         try:
             with warnings.catch_warnings(record=True) as w:
                 result = function(*args, **kwargs)
@@ -46,7 +71,9 @@ def suppress_warnings(*modules) -> Callable:
 
     """
     def decorator(function: Callable) -> Callable:
+        """decorator function"""
         def wrapper(*args, **kwargs) -> Any:
+            """wrapper function"""
             # In case the module warnings were ignored by prior, calling
             # function, as not to reset the ignored level
             ignored = [False] * len(modules)

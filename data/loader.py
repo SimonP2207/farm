@@ -523,72 +523,62 @@ class FarmConfiguration:
                                        gains=gains,
                                        dd_effects=dd_effects)
 
-        # Sky model setup
+        # Instantiate all instances of configuration classes for all sky model
+        # components
         cfg_sky_models = self.cfg["sky_models"]
-        h21cm, ateam, galactic, extragalactic = (False, ) * 4
-        gdsm, gssm, known_sources, trecs = (False, ) * 4
-        if cfg_sky_models["21cm"]["include"]:
-            h21cm = EoR21cmConfiguration(
-                include=cfg_sky_models["21cm"]["include"],
-                image=cfg_sky_models["21cm"]["image"],
-                create=cfg_sky_models["21cm"]["create"]
-            )
+        h21cm = EoR21cmConfiguration(
+            include=cfg_sky_models["21cm"]["include"],
+            image=cfg_sky_models["21cm"]["image"],
+            create=cfg_sky_models["21cm"]["create"]
+        )
+        ateam = ATeamConfiguration(
+            include=cfg_sky_models["A-Team"]["include"],
+            image="",
+            demix_error=cfg_sky_models["A-Team"]["demix_error"]
+        )
 
-        if cfg_sky_models["A-Team"]["include"]:
-            ateam = ATeamConfiguration(
-                cfg_sky_models["A-Team"]["include"],
-                image="",
-                demix_error=cfg_sky_models["A-Team"]["demix_error"]
-            )
+        gdsm = GalacticComponentConfiguration(
+            include=cfg_sky_models['Galactic']['LargeScale']["include"],
+            image=cfg_sky_models['Galactic']['LargeScale']["image"],
+            create=cfg_sky_models['Galactic']['LargeScale']["create"]
+        )
 
-        if cfg_sky_models['Galactic']['LargeScale']["include"]:
-            gdsm = GalacticComponentConfiguration(
-                cfg_sky_models['Galactic']['LargeScale']["include"],
-                cfg_sky_models['Galactic']['LargeScale']["image"],
-                cfg_sky_models['Galactic']['LargeScale']["create"]
-            )
+        gssm = GalacticComponentConfiguration(
+            include=cfg_sky_models['Galactic']['SmallScale']["include"],
+            image=cfg_sky_models['Galactic']['SmallScale']["image"],
+            create=cfg_sky_models['Galactic']['SmallScale']["create"]
+        )
 
-        if cfg_sky_models['Galactic']["SmallScale"]["include"]:
-            gssm = GalacticComponentConfiguration(
-                cfg_sky_models['Galactic']['SmallScale']["include"],
-                cfg_sky_models['Galactic']['SmallScale']["image"],
-                cfg_sky_models['Galactic']['SmallScale']["create"]
-            )
+        galactic = GalacticConfiguration(
+            include=cfg_sky_models['Galactic']["include"],
+            image=cfg_sky_models['Galactic']["image"],
+            large_scale_component=gdsm if gdsm else None,
+            small_scale_component=gssm if gssm else None
+        )
 
-        if cfg_sky_models['Galactic']['include']:
-            galactic = GalacticConfiguration(
-                cfg_sky_models['Galactic']["include"],
-                cfg_sky_models['Galactic']["image"],
-                gdsm if gdsm else None,
-                gssm if gssm else None
-            )
+        known_sources = ExtragalacticComponentConfiguration(
+            include=cfg_sky_models["EG"]["Known"]["include"],
+            image=cfg_sky_models["EG"]["Known"]["image"],
+            create=False,
+            flux_inner=cfg_sky_models["EG"]["flux_inner"],
+            flux_outer=cfg_sky_models["EG"]["flux_outer"],
+            flux_transition=cfg_sky_models["EG"]["flux_transition"]
+        )
 
-        if cfg_sky_models["EG"]["include"]:
-            if cfg_sky_models["EG"]["Known"]["include"]:
-                known_sources = ExtragalacticComponentConfiguration(
-                    cfg_sky_models["EG"]["Known"]["include"],
-                    cfg_sky_models["EG"]["Known"]["image"],
-                    False,
-                    flux_inner=cfg_sky_models["EG"]["flux_inner"],
-                    flux_outer=cfg_sky_models["EG"]["flux_outer"],
-                    flux_transition=cfg_sky_models["EG"]["flux_transition"]
-                )
-
-            if cfg_sky_models["EG"]["TRECS"]["include"]:
-                trecs = ExtragalacticComponentConfiguration(
-                    cfg_sky_models["EG"]["TRECS"]["include"],
-                    cfg_sky_models["EG"]["TRECS"]["image"],
-                    cfg_sky_models["EG"]["TRECS"]["create"],
-                    flux_inner=1e30,
-                    flux_outer=-1e30,
-                    flux_transition=cfg_sky_models["EG"]["flux_transition"]
-                )
-            extragalactic = ExtragalacticConfiguration(
-                cfg_sky_models["EG"]["include"],
-                cfg_sky_models["EG"]["image"],
-                real_component=known_sources,
-                artifical_component=trecs
-            )
+        trecs = ExtragalacticComponentConfiguration(
+            include=cfg_sky_models["EG"]["TRECS"]["include"],
+            image=cfg_sky_models["EG"]["TRECS"]["image"],
+            create=cfg_sky_models["EG"]["TRECS"]["create"],
+            flux_inner=1e30,
+            flux_outer=-1e30,
+            flux_transition=cfg_sky_models["EG"]["flux_transition"]
+        )
+        extragalactic = ExtragalacticConfiguration(
+            include=cfg_sky_models["EG"]["include"],
+            image=cfg_sky_models["EG"]["image"],
+            real_component=known_sources,
+            artifical_component=trecs
+        )
 
         self.sky_model = SkyModelConfiguration(
             h21cm=h21cm,

@@ -366,16 +366,8 @@ def within_square_fov(
     -------
     Position angle(s) from (ra0, dec0) to (ra1, dec1) [deg]
     """
-
-    sep = angular_separation(ra0, dec0, ra1, dec1)
-    angle = position_angle(ra0, dec0, ra1, dec1, positive=True)
-
-    angle = np.where((90 < angle) & (angle < 180), 180 - angle, angle)
-    angle = np.where((180 < angle) & (angle < 270), angle - 180, angle)
-    angle = np.where((270 < angle) & (angle < 360), 360 - angle, angle)
-
-    ddec = np.abs(dec1 - dec0)
-    dra = np.abs(sep * np.sin(np.radians(angle)))
+    dra = angular_separation(ra0, dec1, ra1, dec1)
+    ddec = angular_separation(ra1, dec0, ra1, dec1)
 
     return (dra < fov[0] / 2) & (ddec < fov[1] / 2)
 

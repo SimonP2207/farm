@@ -19,15 +19,6 @@ def _check_file_exists(f: Path):
     return f
 
 
-def fits_table_to_dataframe(fits_table: Path) -> pd.DataFrame:
-    from astropy.io import fits
-
-    with fits.open(fits_table) as hdugsm:
-        data = pd.DataFrame.from_records(hdugsm[1].data)
-
-    return data
-
-
 DATA_FILE_DCY = Path(__file__).parent.joinpath('files')
 FILES = {
     'EXAMPLE_CONFIG': 'example_config.toml',

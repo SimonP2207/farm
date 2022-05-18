@@ -16,6 +16,7 @@ import astropy.units as u
 import farm
 import farm.data.loader as loader
 import farm.physics.astronomy as ast
+import farm.miscellaneous as misc
 import farm.miscellaneous.error_handling as errh
 import farm.miscellaneous.plotting as plotting
 import farm.sky_model.tb_functions as tb_funcs
@@ -24,6 +25,7 @@ from farm.software import oskar
 from farm.software.oskar import set_oskar_sim_beam_pattern, set_oskar_sim_interferometer
 from farm.software.oskar import run_oskar_sim_beam_pattern, run_oskar_sim_interferometer
 from farm import LOGGER
+
 
 # ############################################################################ #
 # ############ Parse configuration from file or from command-line ############ #
@@ -77,13 +79,6 @@ sinterferometer_ini = pathlib.Path(f"{cfg.root_name}_sim_interferometer.ini")
 sbeam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
 out_ms = cfg.root_name / '.ms'
 out_msm = cfg.root_name / '.msm'
-# ############################################################################ #
-# ###################### Set up SkyModel instance ############################ #
-# ############################################################################ #
-LOGGER.info(f"Instantiating SkyModel")
-sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
-                                    cfg.field.cdelt, cfg.field.coord0,
-                                    cfg.correlator.frequencies)
 # ############################################################################ #
 # ############ Determine scan times and produce diagnostic plots ############# #
 # TODO: Clean this section up and place in farm.loader.FarmConfiguration class #
@@ -147,7 +142,8 @@ if cfg.calibration.tec and not model_only:
         LOGGER.info(f"TEC screens saved to "
                     f"{','.join([_.name for _ in cfg.calibration.tec.image])}")
     else:
-        # TODO: Code here to ensure that TEC images match up with desired scan times
+        # TODO: Code here to ensure that TEC images match up with desired scan
+        #  times
         def check_tec_image_compatibility(configuration, tec_images):
             pass
         LOGGER.info("Checking compatibility of TEC .fits images with scans")
@@ -251,14 +247,17 @@ if not model_only:
                                      'K')
 # ############################################################################ #
 # ############################################################################ #
-# ########################  # # # # # # # # # # # # # # # #################### #
-# ############################## SkyModel Creation ########################### #
-# ########################  # # # # # # # # # # # # # # # #################### #
+# #####################  # # # # # # # # # # # # # # # ####################### #
+# ########################### SkyModel Creation ############################## #
+# #####################  # # # # # # # # # # # # # # # ####################### #
 # ############################################################################ #
+LOGGER.info(f"Instantiating SkyModel")
+sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
+                                    cfg.field.cdelt, cfg.field.coord0,
+                                    cfg.correlator.frequencies)
 # ############################################################################ #
 # ################## Large-scale Galactic foreground model ################### #
 # ############################################################################ #
-gdsm = None
 if cfg.sky_model.galactic.large_scale_component.include:
     if cfg.sky_model.galactic.large_scale_component.create:
         LOGGER.info("Creating large-scale Galactic foreground images")
@@ -271,14 +270,17 @@ if cfg.sky_model.galactic.large_scale_component.include:
         )
         gdsm.add_frequency(cfg.correlator.frequencies)
     else:
-        errh.raise_error(ValueError,
-                         "Loading GDSM from image not currently supported")
-        # if not cfg.sky_model.gdsm.image.exists():
-        #     raise FileNotFoundError("Check path for GDSM image")
-        # gdsm = farm.sky_model.SkyComponent.load_from_fits(
-        #     fitsfile=cfg.sky_model.gdsm.image,
-        #     name='GDSM'
-        # )
+        fits_gdsm = cfg.sky_model.galactic.small_scale_component.image
+        if not fits_gdsm.exists():
+            errh.raise_error(FileNotFoundError, f"{fits_gdsm} does not exist")
+        elif fits_gdsm.is_dir():
+            errh.raise_error(FileNotFoundError, f"{fits_gdsm} is a directory")
+
+        LOGGER.info(f"Loading Galactic large-scale component from {fits_gdsm}")
+        gdsm = farm.sky_model.SkyComponent.load_from_fits(
+            fitsfile=fits_gdsm, name='GDSM', freqs=cfg.correlator.frequencies
+        )
+        gdsm = gdsm.regrid(sky_model)
     # In the case that the small-scale Galactic emission is not included in
     # the SkyModel, add the large-scale emission component alone to the
     # SkyModel
@@ -292,46 +294,43 @@ else:
 # ############################################################################ #
 # ################ Small-scale Galactic foreground model ##################### #
 # ############################################################################ #
-gssm = None
-if cfg.sky_model.galactic.small_scale_component:
-    fits_gssm = None
+if cfg.sky_model.galactic.small_scale_component.include:
     if cfg.sky_model.galactic.small_scale_component.create:
         errh.raise_error(NotImplementedError,
-                         "Currently can only load GSSM model from fits")
+                         "Currently can only load GSSM model from fits image")
+        sys.exit()
     else:
-        if cfg.sky_model.galactic.small_scale_component.image == "":
-            fits_gssm = farm.data.FILES['IMAGES']['MHD']
-        elif cfg.sky_model.galactic.small_scale_component.image.exists():
-            fits_gssm = cfg.sky_model.galactic.small_scale_component.image
-        else:
-            errh.raise_error(FileNotFoundError,
-                             f"{cfg.sky_model.galactic.small_scale_component.image} does not exist")
-        LOGGER.info(f"Loading Galactic small-scale component from "
-                    f"{fits_gssm}")
+        fits_gssm = cfg.sky_model.galactic.small_scale_component.image
+        if not fits_gssm.exists():
+            errh.raise_error(FileNotFoundError, f"{fits_gssm} does not exist")
+        elif fits_gssm.is_dir():
+            errh.raise_error(FileNotFoundError, f"{fits_gssm} is a directory")
 
-    with fits.open(fits_gssm) as hdulist:
-        fits_nx = np.shape(hdulist[0].data)[-1]
+        LOGGER.info(f"Loading Galactic small-scale component from {fits_gssm}")
+        with fits.open(fits_gssm) as hdulist:
+            fits_nx = np.shape(hdulist[0].data)[-1]
 
-    gssm = farm.sky_model.SkyComponent.load_from_fits(
-        fitsfile=fits_gssm,
-        name='GSSM',
-        cdelt=cfg.field.fov[0] / fits_nx,
-        coord0=cfg.field.coord0,
-        freqs=cfg.correlator.frequencies
-    )
+        # cdelt/coord0 replace fits header values here since small-scale image
+        # is not a real observation
+        gssm = farm.sky_model.SkyComponent.load_from_fits(
+            fitsfile=fits_gssm,
+            name='GSSM',
+            cdelt=cfg.field.fov[0] / fits_nx,
+            coord0=cfg.field.coord0,
+            freqs=cfg.correlator.frequencies
+        )
 
-    rot_angle = ast.angle_to_galactic_plane(cfg.field.coord0)
-    LOGGER.info(f"Rotating Galactic small-scale component by "
-                f"{np.degrees(rot_angle):.1f}deg")
-    gssm.rotate(angle=rot_angle, inplace=True)
+        rot_angle = ast.angle_to_galactic_plane(cfg.field.coord0)
+        LOGGER.info(f"Rotating Galactic small-scale component by "
+                    f"{np.degrees(rot_angle):.1f}deg")
+        gssm.rotate(angle=rot_angle, inplace=True)
 
-    if cfg.sky_model.galactic.large_scale_component:
-        LOGGER.info("Regridding small-scale images to large-scale parent")
-        gssm = gssm.regrid(gdsm)
+        LOGGER.info("Regridding small-scale image")
+        gssm = gssm.regrid(sky_model)
 
+    if cfg.sky_model.galactic.large_scale_component.include:
         LOGGER.info("Normalising small/large-scale power spectra")
         gssm.normalise(gdsm, inplace=True)
-
         merged = gssm.merge(gdsm, (gssm.cdelt, gssm.cdelt, 0.),
                             (56. / 60., 56. / 60., 0.), 'GASM')
         sky_model.add_component(merged)
@@ -368,91 +367,93 @@ else:
 # ############################################################################ #
 # Also, separate sky model for in-fov and out-fov sources with flux cutoff
 # for each
-ps = None
-if cfg.sky_model.extragalactic.real_component:
+eg_real = None
+if cfg.sky_model.extragalactic.real_component.include:
     LOGGER.info("Incorporating known point sources into foreground model")
     if cfg.sky_model.extragalactic.real_component.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load model from fits")
     else:
-        if cfg.sky_model.extragalactic.real_component.image == "":
-            catalogue = farm.data.FILES['TABLES']['GLEAM']
-        elif cfg.sky_model.extragalactic.real_component.image.exists():
-            catalogue = cfg.sky_model.extragalactic.real_component.image
-        elif not cfg.sky_model.extragalactic.real_component.image.exists():
-            errh.raise_error(
-                FileNotFoundError,
-                f"{str(cfg.sky_model.extragalactic.real_component.image)} "
-                f"does not exist"
+        fits_eg_real = cfg.sky_model.extragalactic.real_component.image
+
+        if not fits_eg_real.exists():
+            errh.raise_error(FileNotFoundError, f"{fits_eg_real} doesn't exist")
+        elif fits_eg_real.is_dir():
+            errh.raise_error(FileNotFoundError, f"{fits_eg_real} is a dir")
+
+        if misc.fits.is_fits_table(fits_eg_real):
+            # TODO: Refactor all of the below code into sensible function(s)
+            # Parse .fits table data
+            LOGGER.info("Loading GLEAM catalogue")
+            data = misc.fits.fits_table_to_dataframe(fits_eg_real)
+
+            # Column name translation of GLEAM_EGC_v2.fits
+            sky_model_cols = {'ra': 'RAJ2000', 'dec': 'DEJ2000',
+                              'fluxI': 'int_flux_wide',
+                              'freq0': 'freq0', 'spix': 'alpha',
+                              'maj': 'a_wide', 'min': 'b_wide',
+                              'pa': 'pa_wide'}
+
+            # Add needed columns to DataFrame
+            # TODO: Put hard-coded, generic spectral-index of -0.7 somewhere
+            #  sensible
+            data[sky_model_cols['spix']] = np.where(np.isnan(data.alpha),
+                                                    -0.7, data.alpha)
+
+            # Create source masks for field of view and side lobes
+            data['_fov'] = ast.within_square_fov(
+                cfg.field.fov, cfg.field.coord0.ra.deg,
+                cfg.field.coord0.dec.deg,
+                data[sky_model_cols['ra']], data[sky_model_cols['dec']]
             )
-        else:
+
+            cfg_eg_real = cfg.sky_model.extragalactic.real_component
+            # Mask which excludes sources outside the field of view or above
+            # inner flux upper-limit
+            mask_fov = (
+                data['_fov']
+                &
+                (data[sky_model_cols['fluxI']] < cfg_eg_real.flux_inner)
+            )
+
+            # Mask which excludes sources below outer flux lower-limit
+            mask_side_lobes = (
+                data[sky_model_cols['fluxI']] > cfg_eg_real.flux_outer
+            )
+
+            # Mask excluding known sources below the transition threshold
+            flux_range_mask = (
+                (cfg_eg_real.flux_transition < data[sky_model_cols['fluxI']])
+            )
+
+            mask_fov = mask_fov & flux_range_mask
+            mask_side_lobes = mask_side_lobes & flux_range_mask
+
+            # Create SkyComponent instance and save .fits image of GLEAM
+            # sources
+            eg_real = farm.sky_model.SkyComponent.load_from_fits_table(
+                sky_model_cols, fits_eg_real, 'GLEAM', cfg.field.cdelt,
+                cfg.field.coord0, fov=cfg.field.fov,
+                freqs=cfg.correlator.frequencies,
+                beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
+            )
+        elif misc.fits.is_fits_image(fits_eg_real):
             errh.raise_error(
                 NotImplementedError,
-                "Currently can only load GLEAM model from fits table")
-        # TODO: Refactor all of the below code into sensible function(s)
-        # Parse .fits table data
-        LOGGER.info("Loading GLEAM catalogue")
+                "Currently can only load GLEAM model from fits table"
+            )
+        else:
+            errh.raise_error(Exception, f"Unsure of format of {fits_eg_real}")
 
-        data = farm.data.fits_table_to_dataframe(catalogue)
-
-        # Column name translation of GLEAM_EGC_v2.fits
-        sky_model_cols = {'ra': 'RAJ2000', 'dec': 'DEJ2000',
-                          'fluxI': 'int_flux_wide',
-                          'freq0': 'freq0', 'spix': 'alpha',
-                          'maj': 'a_wide', 'min': 'b_wide',
-                          'pa': 'pa_wide'}
-
-        # Add needed columns to DataFrame
-        # TODO: Put hard-coded, generic spectral-index of -0.7 somewhere
-        #  sensible
-        data[sky_model_cols['spix']] = np.where(np.isnan(data.alpha),
-                                                -0.7, data.alpha)
-        data['freq0'] = 200e6  # GLEAM reference frequency
-
-        # Create source masks for field of view and side lobes
-        data['_fov'] = ast.within_square_fov(
-            cfg.field.fov, cfg.field.coord0.ra.deg,
-            cfg.field.coord0.dec.deg,
-            data[sky_model_cols['ra']], data[sky_model_cols['dec']]
-        )
-
-        mask_fov = (
-            data['_fov'] &
-            (data[sky_model_cols['fluxI']] <
-             cfg.sky_model.extragalactic.real_component.flux_inner)
-        )
-
-        mask_side_lobes = (data[sky_model_cols['fluxI']] >
-                           cfg.sky_model.extragalactic.real_component.flux_outer)
-
-        flux_range_mask = ((cfg.sky_model.extragalactic.real_component.flux_transition <
-                            data[sky_model_cols['fluxI']]) &
-                           (data[sky_model_cols['fluxI']] < 1e30))
-
-        # Mask source outside of designated flux range
-        mask_fov = mask_fov & flux_range_mask
-        mask_side_lobes = mask_side_lobes & flux_range_mask
-
-        # Create SkyComponent instance and save .fits image of GLEAM
-        # sources
-        ps = farm.sky_model.SkyComponent.load_from_fits_table(
-            sky_model_cols, catalogue, 'GLEAM', cfg.field.cdelt,
-            cfg.field.coord0, fov=cfg.field.fov,
-            freqs=cfg.correlator.frequencies,
-            beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
-        )
-
-        sky_model.add_component(ps)
+        sky_model.add_component(eg_real)
 
         if not model_only:
             # Add to fov Sky instance
-            oskar.add_dataframe_to_sky(data[mask_fov],
-                                       sky_fov,
+            oskar.add_dataframe_to_sky(data[mask_fov], sky_fov,
                                        sky_model_cols)
 
             # Add to side-lobes Sky instance
-            oskar.add_dataframe_to_sky(data[mask_side_lobes],
-                                       sky_side_lobes,
+            oskar.add_dataframe_to_sky(data[mask_side_lobes], sky_side_lobes,
                                        sky_model_cols)
 
 else:
@@ -490,7 +491,7 @@ if cfg.sky_model.extragalactic.artifical_component.include:
         freqs=cfg.correlator.frequencies
     )
 
-    trecs = trecs.regrid(gdsm)
+    trecs = trecs.regrid(sky_model)
     sky_model.add_component(trecs)
 
 else:
@@ -504,21 +505,14 @@ if cfg.sky_model.h21cm:
     if cfg.sky_model.h21cm.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load model from fits")
+        sys.exit()
     else:
-        if cfg.sky_model.h21cm.image == "":
-            fits_h21cm = farm.data.FILES['IMAGES']['H21CM']
-        elif cfg.sky_model.h21cm.image.exists():
-            fits_h21cm = cfg.sky_model.h21cm.image
-        else:
+        fits_h21cm = cfg.sky_model.h21cm.image
+        if not (fits_h21cm.exists() and fits_h21cm.is_file()):
             errh.raise_error(FileNotFoundError,
                              f"{str(cfg.sky_model.h21cm.image)} "
                              "does not exist")
     LOGGER.info(f"Loading EoR 21cm component from {fits_h21cm}")
-    # Parse .fits table data
-    # TODO: Conditional here as to whether to load from the fits
-    #  image or table
-    # Create SkyComponent instance and save .fits image of GLEAM
-    # sources
     h21cm = farm.sky_model.SkyComponent.load_from_fits(
         fitsfile=fits_h21cm,
         name='H21CM',
@@ -527,7 +521,7 @@ if cfg.sky_model.h21cm:
         freqs=cfg.correlator.frequencies
     )
 
-    h21cm = h21cm.regrid(gdsm)
+    h21cm = h21cm.regrid(sky_model)
     sky_model.add_component(h21cm)
 else:
     LOGGER.info("Not including EoR 21cm signal into sky model")

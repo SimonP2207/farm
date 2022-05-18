@@ -11,12 +11,13 @@ from typing import Tuple, List, Union, TypeVar
 
 import numpy.typing as npt
 import numpy as np
+import pandas as pd
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.io.fits import Header
 
-from ..data import fits_table_to_dataframe
+from ..miscellaneous.fits import fits_table_to_dataframe
 from ..data.loader import Correlator
 from ..miscellaneous import decorators, error_handling as errh, interpolate_values, generate_random_chars
 from ..physics import astronomy as ast
@@ -189,11 +190,58 @@ class _BaseSkyClass(ABC):
     VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR')
 
     @classmethod
-    def load_from_fits_table(cls, columns: dict, fitsfile: pathlib.Path,
+    def load_from_fits_table(cls, columns: dict,
+                             fitsfile: Union[pathlib.Path, fits.HDUList],
                              name: str, cdelt: float,
-                             coord0: SkyCoord, fov: float,
+                             coord0: SkyCoord, fov: Tuple[float, float],
                              freqs: npt.ArrayLike,
-                             beam: Union[None, dict]) -> 'SkyComponent':
+                             beam: Union[None, dict] = None) -> 'SkyComponent':
+        """
+        Creates a SkyComponent instance from a .fits table file or HDUList
+        loaded from such
+
+        Parameters
+        ----------
+        columns
+            Dictionary of columns whose keys are 'ra', 'dec', 'fluxI', 'freq0',
+            'spix', 'maj', 'min', and 'pa' and corresponding values are the
+            column names corresponding to those parameters within the fits
+            table. For example:
+                {'ra': 'RAJ2000', 'dec': 'DEJ2000', 'fluxI': 'int_flux_wide',
+                 'freq0': 'freq0', 'spix': 'alpha', 'maj': 'a_wide',
+                 'min': 'b_wide', 'pa': 'pa_wide'}
+        fitsfile
+            pathlib.Path to .fits table, or HDUList instance
+        name
+            Name to give returned SkyComponent instance
+        cdelt
+            Cells size [deg]
+        coord0
+            Central coordinate
+        fov
+            Field of view extent in x and y as a tuple [deg]
+        freqs
+            Frequencies of the SkyComponent
+        beam
+            Beam with which catalogue sizes are convolved with (dict). If
+            specified, the beam will be deconvolved from the source dimensions
+            before placing within the brightness distribution. Default is None
+            (i.e. no deconvolution). Circular beams only are allowed for the
+            moment. Example of required dict format:
+                {'maj': 0.01, 'min': 0.01, 'pa': 0.}
+
+        Returns
+        -------
+        SkyComponent instance
+
+        Raises
+        ------
+        TypeError
+            If fitsfile is not a pathlib.Path or HDUList instance
+
+        ValueError
+            If non-circular beam is specified as the beam argument
+        """
         from astropy import wcs
         from ..miscellaneous import image_functions as imfunc
 
@@ -207,19 +255,27 @@ class _BaseSkyClass(ABC):
                             im_hdr['NAXIS2'],
                             im_hdr['NAXIS1']))
 
-        # Set up pixel/coordinate grid
+        # Set up pixel grid and coordinate grid
         zz, yy, xx = np.meshgrid(np.arange(im_hdr['NAXIS3']),
                                  np.arange(im_hdr['NAXIS2']),
                                  np.arange(im_hdr['NAXIS1']), indexing='ij')
         rra, ddec, ffreq = im_wcs.wcs_pix2world(xx, yy, zz, 0)
 
-        data = fits_table_to_dataframe(fitsfile)
-        data['freq0'] = 2e8  # TODO: This is hard-coded
+        if isinstance(fitsfile, pathlib.Path):
+            data = fits_table_to_dataframe(fitsfile)
+        elif isinstance(fitsfile, fits.HDUList):
+            data = pd.DataFrame.from_records(fitsfile[1].data)
+        else:
+            errh.raise_error(TypeError, f"{fitsfile} not an HDUList instance "
+                                        "or path to a .fits table")
+
         data[columns['spix']] = np.where(np.isnan(data.alpha), -0.7, data.alpha)
         data['_fov'] = ast.within_square_fov(
             fov, coord0.ra.deg, coord0.dec.deg,
             data[columns['ra']], data[columns['dec']]
         )
+
+        data = data[data._fov]
 
         # Deconvolve given sizes from beam, if given
         if beam:
@@ -257,18 +313,34 @@ class _BaseSkyClass(ABC):
 
         # Loop through all sources and add to grid
         for _, row in data.iterrows():
-            idxs = im_wcs.world_to_array_index_values(row.RAJ2000, row.DEJ2000,
-                                                      freqs[0])
-            didx = int(row.a_wide * 2 / 3600. // cdelt + 1)
+            idxs = im_wcs.world_to_array_index_values(
+                row[columns['ra']], row[columns['dec']], freqs[0]
+            )
+
+            # Width in indices of sub-array within data to calculate source flux
+            didx = int(row[columns['maj']] * 2 / 3600. // cdelt + 1)
             didx = np.max([didx, 5])
 
-            dec_idx = np.max([idxs[1] - didx, 0]), np.min(
-                [idxs[1] + didx, im_hdr['NAXIS2']])
-            ra_idx = np.max([idxs[2] - didx, 0]), np.min(
-                [idxs[2] + didx, im_hdr['NAXIS1']])
+            # Index ranges in ra and dec within which to calculate source flux
+            ra_idx = (np.max([idxs[2] - didx, 0]),
+                      np.min([idxs[2] + didx, im_hdr['NAXIS1']]))
+
+            dec_idx = (np.max([idxs[1] - didx, 0]),
+                       np.min([idxs[1] + didx, im_hdr['NAXIS2']]))
 
             rra_ = rra[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
             ddec_ = ddec[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
+
+            # If source if near RA = 0, imfunc.gaussian_2d is given coordinates
+            # in rra_ that it calculates are ~360deg from source position (due
+            # to the wrapped nature of RA, which imfunc.gaussian_2d is unaware
+            # of) leading to zeroes. Therefore unwrap the rra_ coordinates if
+            # required
+            if np.ptp(rra_) > 180:
+                ra0 = row[columns['ra']]
+                rra_ = np.where(np.abs(rra_ - ra0) > 180,
+                                rra_ + (360. if ra0 > 180 else -360.),
+                                rra_)
 
             val0 = imfunc.gaussian_2d(rra_, ddec_,
                                       row[columns['ra']], row[columns['dec']],
@@ -494,8 +566,13 @@ class _BaseSkyClass(ABC):
         return data_
 
     @property
-    def frequencies(self) -> npt.ArrayLike:
+    def frequencies(self):
+        """Observational frequencies"""
         return self._frequencies
+
+    @frequencies.setter
+    def frequencies(self, new_freq):
+        self.add_frequency(new_freq)
 
     def add_frequency(self, new_freq: Union[float, npt.ArrayLike]):
         """
@@ -1023,21 +1100,18 @@ class SkyModel(_BaseSkyClass):
         self._components = []
 
     def t_b(self, freq: float) -> np.ndarray:
+        """
+        Brightness temperature array at specified frequency (must be listed in
+        self.frequencies)
+        """
         idx = np.squeeze(np.isclose(self.frequencies, freq, atol=1.))
 
         return self._tb_data[idx]
 
     @property
     def components(self):
+        """Constituent SkyComponent instances"""
         return self._components
-
-    @property
-    def frequencies(self):
-        return self._frequencies
-
-    @frequencies.setter
-    def frequencies(self, *args, **kwargs):
-        pass
 
     def __add__(self, other: Union[List[SkyComponent],
                                    Tuple[SkyComponent],
