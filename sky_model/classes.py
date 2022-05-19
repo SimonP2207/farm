@@ -195,6 +195,7 @@ class _BaseSkyClass(ABC):
                              name: str, cdelt: float,
                              coord0: SkyCoord, fov: Tuple[float, float],
                              freqs: npt.ArrayLike,
+                             flux_range: Tuple[float, float] = [0., 1e30],
                              beam: Union[None, dict] = None) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits table file or HDUList
@@ -225,9 +226,11 @@ class _BaseSkyClass(ABC):
         beam
             Beam with which catalogue sizes are convolved with (dict). If
             specified, the beam will be deconvolved from the source dimensions
-            before placing within the brightness distribution. Default is None
-            (i.e. no deconvolution). Circular beams only are allowed for the
-            moment. Example of required dict format:
+            before placing within the brightness distribution. Ensure that beam
+            major and minor axes are in the same units as the fits table's
+            source major/minor axes. Default is None (i.e. no deconvolution).
+            Circular beams only are allowed for the moment. Example of required
+            dict format:
                 {'maj': 0.01, 'min': 0.01, 'pa': 0.}
 
         Returns
@@ -270,12 +273,15 @@ class _BaseSkyClass(ABC):
                                         "or path to a .fits table")
 
         data[columns['spix']] = np.where(np.isnan(data.alpha), -0.7, data.alpha)
-        data['_fov'] = ast.within_square_fov(
+        fov_mask = ast.within_square_fov(
             fov, coord0.ra.deg, coord0.dec.deg,
             data[columns['ra']], data[columns['dec']]
         )
 
-        data = data[data._fov]
+        flux_range_mask = ((data[columns['fluxI']] >= flux_range[0]) &
+                           (data[columns['fluxI']] <= flux_range[1]))
+
+        data = data[fov_mask & flux_range_mask]
 
         # Deconvolve given sizes from beam, if given
         if beam:
@@ -476,13 +482,12 @@ class _BaseSkyClass(ABC):
                                          "flux values (not extrapolation) only "
                                          "supported")
                     else:
-                        fits_idx_neighbours = np.array([-1, 1]) + fits_data_idx
                         data[idx] = interpolate_values(
                             freq,
-                            fits_data[fits_idx_neighbours[0]],
-                            fits_data[fits_idx_neighbours[1]],
-                            fits_freqs[fits_idx_neighbours[0]],
-                            fits_freqs[fits_idx_neighbours[1]]
+                            fits_data[fits_data_idx - 1],
+                            fits_data[fits_data_idx],
+                            fits_freqs[fits_data_idx - 1],
+                            fits_freqs[fits_data_idx]
                         )
 
         if unit == 'K':
@@ -780,10 +785,12 @@ class _BaseSkyClass(ABC):
         template_mir_image = pathlib.Path(f'temp_template_image_{sffx}.im')
         input_mir_image = pathlib.Path(f'temp_input_image_{sffx}.im')
         out_mir_image = pathlib.Path(f'temp_out_image_{sffx}.im')
+        out_mir_image_imblr = pathlib.Path(f'temp_out_image_imblr_{sffx}.im')
         out_fits_image = pathlib.Path(f'out_image_{sffx}.fits')
 
         temporary_images = (template_mir_image, input_mir_image,
-                            out_mir_image, out_fits_image)
+                            out_mir_image, out_mir_image_imblr,
+                            out_fits_image)
 
         for temporary_image in temporary_images:
             if temporary_image.exists():
@@ -795,7 +802,9 @@ class _BaseSkyClass(ABC):
         miriad.regrid(_in=input_mir_image,
                       tin=template_mir_image,
                       out=out_mir_image)
-        miriad.fits(op='xyout', _in=out_mir_image, out=out_fits_image)
+
+        miriad.imblr(_in=out_mir_image, out=out_mir_image_imblr, value=0.)
+        miriad.fits(op='xyout', _in=out_mir_image_imblr, out=out_fits_image)
 
         regridded_input_temp = self.load_from_fits(out_fits_image)
 

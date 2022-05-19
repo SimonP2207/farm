@@ -15,14 +15,14 @@
     ra0 = "00:00:00.0"  # HH:MM:SS.S
     dec0 = "-30:00:00.00"  # DD:MM:SS.SS
     frame = "fk5"  # Astropy-compatible frame string e.g. fk4, fk5, galactic etc
-    nxpix = 512  # Number of pixels in x/right ascension
-    nypix = 512  # Number of pixels in y/declination
-    cdelt = 30.0  # arcsec
+    nxpix = 1024  # Number of pixels in x/right ascension
+    nypix = 1024  # Number of pixels in y/declination
+    cdelt = 28.125  # arcsec
 
   [observation.correlator]
     freq_min = 115e6  # Hz
     freq_max = 169e6  # Hz
-    nchan = 4  # Number of evenly spaced channels across whole bandwidth, int
+    nchan = 217  # Number of evenly spaced channels across whole bandwidth, int
     chanwidth = 250e3  # channel bandwidth for smearing calculation, Hz
     t_int = 60.0  # visibility integration time, s
 
@@ -60,7 +60,7 @@
     image = ""
 
     [sky_models.Galactic.LargeScale]
-      include = true
+      include = false
       create = true
       image = ""
 
@@ -78,7 +78,7 @@
 
     [sky_models.EG.Known]
       include = true
-      image = "/Users/simon.purser/pylib/farm/data/files/GLEAM_EGC_v2_compact.fits"  # fits image or table
+      image = "/Users/simon.purser/pylib/farm/data/files/GLEAM_catalogue.fits"  # fits image or table
 
     [sky_models.EG.TRECS]
       include = true

@@ -401,20 +401,13 @@ if cfg.sky_model.extragalactic.real_component.include:
                                                     -0.7, data.alpha)
 
             # Create source masks for field of view and side lobes
-            data['_fov'] = ast.within_square_fov(
+            mask_fov = ast.within_square_fov(
                 cfg.field.fov, cfg.field.coord0.ra.deg,
                 cfg.field.coord0.dec.deg,
                 data[sky_model_cols['ra']], data[sky_model_cols['dec']]
             )
 
             cfg_eg_real = cfg.sky_model.extragalactic.real_component
-            # Mask which excludes sources outside the field of view or above
-            # inner flux upper-limit
-            mask_fov = (
-                data['_fov']
-                &
-                (data[sky_model_cols['fluxI']] < cfg_eg_real.flux_inner)
-            )
 
             # Mask which excludes sources below outer flux lower-limit
             mask_side_lobes = (
@@ -423,11 +416,9 @@ if cfg.sky_model.extragalactic.real_component.include:
 
             # Mask excluding known sources below the transition threshold
             flux_range_mask = (
-                (cfg_eg_real.flux_transition < data[sky_model_cols['fluxI']])
+                (data[sky_model_cols['fluxI']] < cfg_eg_real.flux_inner) &
+                (data[sky_model_cols['fluxI']] > cfg_eg_real.flux_transition)
             )
-
-            mask_fov = mask_fov & flux_range_mask
-            mask_side_lobes = mask_side_lobes & flux_range_mask
 
             # Create SkyComponent instance and save .fits image of GLEAM
             # sources
@@ -435,7 +426,9 @@ if cfg.sky_model.extragalactic.real_component.include:
                 sky_model_cols, fits_eg_real, 'GLEAM', cfg.field.cdelt,
                 cfg.field.coord0, fov=cfg.field.fov,
                 freqs=cfg.correlator.frequencies,
-                beam={'maj': 2. / 60, 'min': 2. / 60., 'pa': 0.}
+                flux_range=(cfg_eg_real.flux_transition,
+                            cfg_eg_real.flux_inner),
+                beam={'maj': 2. * 60, 'min': 2. * 60., 'pa': 0.}
             )
         elif misc.fits.is_fits_image(fits_eg_real):
             errh.raise_error(
@@ -448,9 +441,10 @@ if cfg.sky_model.extragalactic.real_component.include:
         sky_model.add_component(eg_real)
 
         if not model_only:
+            # Added to SkyModel instead
             # Add to fov Sky instance
-            oskar.add_dataframe_to_sky(data[mask_fov], sky_fov,
-                                       sky_model_cols)
+            # oskar.add_dataframe_to_sky(data[mask_fov & flux_range_mask],
+            #                            sky_fov, sky_model_cols)
 
             # Add to side-lobes Sky instance
             oskar.add_dataframe_to_sky(data[mask_side_lobes], sky_side_lobes,
@@ -481,12 +475,12 @@ if cfg.sky_model.extragalactic.artifical_component.include:
     # Parse .fits table data
     # TODO: Conditional here as to whether to load from the fits
     #  image or table
-    # Create SkyComponent instance and save .fits image of GLEAM
-    # sources
-    trecs = farm.sky_model.SkyComponent.load_from_fits(
+    # Create SkyComponent instance and save .fits image of TRECS sources
+    # Have to regrid fits_trecs here before instantiating a SkyComponent from it
+    # as memory runs out with the full TRECS image
+        trecs = farm.sky_model.SkyComponent.load_from_fits(
         fitsfile=fits_trecs,
         name='TRECS',
-        cdelt=cfg.field.cdelt,
         coord0=cfg.field.coord0,
         freqs=cfg.correlator.frequencies
     )
@@ -513,10 +507,10 @@ if cfg.sky_model.h21cm:
                              f"{str(cfg.sky_model.h21cm.image)} "
                              "does not exist")
     LOGGER.info(f"Loading EoR 21cm component from {fits_h21cm}")
+
     h21cm = farm.sky_model.SkyComponent.load_from_fits(
         fitsfile=fits_h21cm,
         name='H21CM',
-        cdelt=cfg.field.cdelt,
         coord0=cfg.field.coord0,
         freqs=cfg.correlator.frequencies
     )
