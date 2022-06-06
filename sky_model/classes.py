@@ -7,7 +7,7 @@ import pathlib
 import tempfile
 import math
 from abc import ABC, abstractmethod
-from typing import Tuple, List, Union, TypeVar
+from typing import Tuple, List, Optional, Union, TypeVar, Type
 
 import numpy.typing as npt
 import numpy as np
@@ -141,12 +141,12 @@ def deconvolve_cube(input_fits, output_fits, beam):
     shutil.rmtree(temp_mir_im)
 
 
-def hdr2d_from_skymodel(sky_class: SkyClassType) -> Header:
+def hdr2d_from_skymodel(sky_class: Type[SkyClassType]) -> Header:
     return hdr2d(sky_class.n_x, sky_class.n_y, sky_class.coord0,
                  sky_class.cdelt, sky_class.coord0.frame.name)
 
 
-def hdr3d_from_skyclass(sky_class: SkyClassType) -> Header:
+def hdr3d_from_skyclass(sky_class: Type[SkyClassType]) -> Header:
     if len(sky_class.frequencies) < 1:
         raise ValueError("Can't create Header from SkyClass with no frequency "
                          "information")
@@ -156,7 +156,7 @@ def hdr3d_from_skyclass(sky_class: SkyClassType) -> Header:
                  sky_class.coord0.frame.name)
 
 
-def deconvolve_fwhm(conv_size, beam_size):
+def deconvolve_fwhm(conv_size: float, beam_size: float) -> float:
     return np.sqrt(conv_size ** 2. - beam_size ** 2.)
 
 
@@ -196,7 +196,7 @@ class _BaseSkyClass(ABC):
                              coord0: SkyCoord, fov: Tuple[float, float],
                              freqs: npt.ArrayLike,
                              flux_range: Tuple[float, float] = [0., 1e30],
-                             beam: Union[None, dict] = None) -> 'SkyComponent':
+                             beam: Optional[dict] = None) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits table file or HDUList
         loaded from such
@@ -223,6 +223,8 @@ class _BaseSkyClass(ABC):
             Field of view extent in x and y as a tuple [deg]
         freqs
             Frequencies of the SkyComponent
+        flux_range
+            Lower and upper bound of source fluxes as a 2-tuple, (lower, upper)
         beam
             Beam with which catalogue sizes are convolved with (dict). If
             specified, the beam will be deconvolved from the source dimensions
@@ -377,10 +379,10 @@ class _BaseSkyClass(ABC):
     @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
     def load_from_fits(
         cls, fitsfile: pathlib.Path,
-        name: Union[None, str] = None,
-        cdelt: Union[None, float] = None,
-        coord0: Union[None, SkyCoord] = None,
-        freqs: Union[None, npt.ArrayLike] = None
+        name: Optional[str] = None,
+        cdelt: Optional[float] = None,
+        coord0: Optional[SkyCoord] = None,
+        freqs: Optional[npt.ArrayLike] = None
     ) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits cube
@@ -756,7 +758,7 @@ class _BaseSkyClass(ABC):
         miriad.fits(_in=temp_fits_file, out=miriad_image, op='xyin')
         temp_fits_file.unlink()
 
-    def regrid(self, template: SkyClassType) -> SkyClassType:
+    def regrid(self, template: Type[SkyClassType]) -> SkyClassType:
         """
         Regrid the SkyClass onto the coordinate grid of another SkyClass. Make
         sure that the SkyClass to be regridded is in the field of view of the
@@ -823,7 +825,7 @@ class _BaseSkyClass(ABC):
         return regridded_input_skyclass
 
     def rotate(self, angle: float,
-               inplace: bool = True) -> Union[None, SkyClassType]:
+               inplace: bool = True) -> Optional[SkyClassType]:
         """
         Rotate the sky brightness distribution by specified angle
 
@@ -872,7 +874,7 @@ class _BaseSkyClass(ABC):
 
         return False
 
-    def possess_similar_header(self, other: SkyClassType) -> bool:
+    def possess_similar_header(self, other: Type[SkyClassType]) -> bool:
         """
         Check if matching image sizes, frequencies and cell sizes between this
         and another sky class instance. Acceptable difference in cell sizes is
@@ -911,7 +913,7 @@ class _BaseSkyClass(ABC):
         return True
 
     def same_spectral_setup(self,
-                            other: Union[SkyClassType, Correlator]) -> bool:
+                            other: Union[Type[SkyClassType], Correlator]) -> bool:
         """
         Check if matching frequencies are present in two sky class instances
 
@@ -940,8 +942,8 @@ class SkyComponent(_BaseSkyClass):
         self.name = name
         self._tb_func = tb_func
 
-    def normalise(self, other: SkyClassType,
-                  inplace: bool = False) -> Union[None, SkyClassType]:
+    def normalise(self, other: Type[SkyClassType],
+                  inplace: bool = False) -> Optional[SkyClassType]:
         """
         Adjust the SkyComponent instance's brightness data in order to properly
         recover the angular power spectrum of the combined power spectrum of
@@ -973,10 +975,10 @@ class SkyComponent(_BaseSkyClass):
             new_skymodeltype._tb_data *= scalings
             return new_skymodeltype
 
-    def merge(self, other: SkyClassType,
-              beam: Union[None, Tuple[float, float, float]] = None,
-              other_beam: Union[None, Tuple[float, float, float]] = None,
-              new_name: Union[None, str] = None,
+    def merge(self, other: Type[SkyClassType],
+              beam: Optional[Tuple[float, float, float]] = None,
+              other_beam: Optional[Tuple[float, float, float]] = None,
+              new_name: Optional[str] = None,
               normalise: bool = True) -> SkyClassType:
         """
         Merge this SkyComponent with another, lower-resolution SkyComponent,

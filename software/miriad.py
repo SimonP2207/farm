@@ -39,8 +39,12 @@ def mir_func(f, thefilter):
     """Wrapper around miriad system calls"""
 
     def func(*args, **kw):
+
+        # Added to provide shortened parameter names so miriad's maximum
+        # character limit is not exceeded
+        original_args = to_args(kw)
         reformat_args = False
-        puthd = False if str(f) != 'puthd' else True
+        puthd = True if str(f) in ('puthd', 'gethd', 'delhd') else False
         for k, v in kw.items():
             if isinstance(v, pathlib.Path):
                 v = str(v)
@@ -63,21 +67,26 @@ def mir_func(f, thefilter):
                 else:
                     raise ValueError(f'help -> {k}={v}')
 
-        # Remove following line to implement shortened parameter inputs
-        reformat_args = False
-
-        if reformat_args and not puthd:
+        if reformat_args:
             mv_dict = {}
             ord_num = 65
             for k, v in kw.items():
+                if len(str(v)) <= MIR_CHAR_LIMIT:
+                    continue
                 if isinstance(v, pathlib.Path):
                     v = str(v)
                 if not isinstance(v, list) and ',' not in v:
                     if k in ('tin', 'out') or match_in(k):
                         next_path_name = chr(ord_num)
                         ord_num += 1
-                        mv_dict[next_path_name] = v
-                        kw[k] = next_path_name
+                        if puthd and match_in(k):
+                            print('help', f)
+                            mv_dict[next_path_name] = os.sep.join(v.split(os.sep)[:-1])
+                            next_path_name += os.sep + v.split(os.sep)[-1]
+                            kw[k] = next_path_name
+                        else:
+                            mv_dict[next_path_name] = v
+                            kw[k] = next_path_name
                 else:
                     if isinstance(v, list):
                         new_v = []
@@ -98,6 +107,7 @@ def mir_func(f, thefilter):
                     else:
                         raise ValueError(f'help -> {k}={v}')
 
+            # In case of shortened input args, rename original to shortened
             for k, v in mv_dict.items():
                 if os.path.exists(v):
                     os.rename(v, k)
@@ -133,10 +143,11 @@ def mir_func(f, thefilter):
         #
         # proc = subprocess.Popen([f, '-f', temp_def_file], shell=False,
         #                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(' '.join([f] + original_args))
+
         proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
-        # print(' '.join([f] + args))
 
         # SJDP added: 10/02/22
         try:
@@ -166,7 +177,8 @@ def mir_func(f, thefilter):
             msg += "\n".join(warns)
             warnings.warn(msg)
 
-        if reformat_args and not puthd:
+        if reformat_args:
+            # In case of shortened input args, rename back to original
             for k, v in mv_dict.items():
                 os.rename(k, v)
 
@@ -286,5 +298,4 @@ miriad = Miriad()
 # __all__ += mir_commands()
 
 if __name__ == '__main__':
-    print(sfuncs.which('miriad'))
-    a = miriad.fits(_in='test.fits', op='xyin', out='test.mirim')
+    a = miriad.fits(_in='test.fits', op='xyin', out='test.im')

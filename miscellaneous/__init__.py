@@ -49,11 +49,11 @@ def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
 
 
 def interpolate_values(desired_x: float,
-                       y_lo: Union[float, npt.ArrayLike],
-                       y_hi: Union[float, npt.ArrayLike],
+                       y_lo: Union[float, npt.ArrayLike, npt.NDArray],
+                       y_hi: Union[float, npt.ArrayLike, npt.NDArray],
                        x_lo: float,
                        x_hi: float,
-                       nans_ok: bool = False) -> npt.ArrayLike:
+                       nans_ok: bool = False) -> Union[float, npt.NDArray]:
     """
     Calculate the interpolated value(s) between two values/array of
     values to a desired x-value, assuming a constant power-law. In cases
