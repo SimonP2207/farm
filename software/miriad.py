@@ -37,6 +37,7 @@ def mir_commands():
 @decorators.log_errors_warnings
 def mir_func(f, thefilter):
     """Wrapper around miriad system calls"""
+    from .. import LOGGER
 
     def func(*args, **kw):
 
@@ -80,7 +81,6 @@ def mir_func(f, thefilter):
                         next_path_name = chr(ord_num)
                         ord_num += 1
                         if puthd and match_in(k):
-                            print('help', f)
                             mv_dict[next_path_name] = os.sep.join(v.split(os.sep)[:-1])
                             next_path_name += os.sep + v.split(os.sep)[-1]
                             kw[k] = next_path_name
@@ -143,7 +143,7 @@ def mir_func(f, thefilter):
         #
         # proc = subprocess.Popen([f, '-f', temp_def_file], shell=False,
         #                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(' '.join([f] + original_args))
+        LOGGER.info(' '.join([f] + original_args))
 
         proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
