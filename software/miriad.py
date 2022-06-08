@@ -6,6 +6,7 @@ method which is located in the farm.software.common module
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import warnings
@@ -79,6 +80,14 @@ def mir_func(f, thefilter):
                 if not isinstance(v, list) and ',' not in v:
                     if k in ('tin', 'out') or match_in(k):
                         next_path_name = chr(ord_num)
+
+                        next_path = pathlib.Path(next_path_name)
+                        if next_path.exists():
+                            if next_path.is_dir():
+                                shutil.rmtree(next_path)
+                            else:
+                                next_path.unlink()
+
                         ord_num += 1
                         if puthd and match_in(k):
                             mv_dict[next_path_name] = os.sep.join(v.split(os.sep)[:-1])
@@ -92,6 +101,14 @@ def mir_func(f, thefilter):
                         new_v = []
                         for v_ in v:
                             next_path_name = chr(ord_num)
+
+                            next_path = pathlib.Path(next_path_name)
+                            if next_path.exists():
+                                if next_path.is_dir():
+                                    shutil.rmtree(next_path)
+                                else:
+                                    next_path.unlink()
+
                             ord_num += 1
                             mv_dict[next_path_name] = v_
                             new_v.append(next_path_name)
@@ -100,6 +117,14 @@ def mir_func(f, thefilter):
                         new_v = []
                         for v_ in v.split(','):
                             next_path_name = chr(ord_num)
+
+                            next_path = pathlib.Path(next_path_name)
+                            if next_path.exists():
+                                if next_path.is_dir():
+                                    shutil.rmtree(next_path)
+                                else:
+                                    next_path.unlink()
+
                             ord_num += 1
                             mv_dict[next_path_name] = v_
                             new_v.append(v_)
@@ -175,7 +200,7 @@ def mir_func(f, thefilter):
         if warns:
             msg = "'%s': " % f
             msg += "\n".join(warns)
-            warnings.warn(msg)
+            LOGGER.warning(msg)
 
         if reformat_args:
             # In case of shortened input args, rename back to original
@@ -183,6 +208,7 @@ def mir_func(f, thefilter):
                 os.rename(k, v)
 
         if proc.returncode != 0:
+            LOGGER.error("\n".join(errors))
             raise MiriadError("\n".join(errors))
         out = stdout.strip()
         if thefilter is not None:
