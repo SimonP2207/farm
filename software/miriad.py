@@ -50,7 +50,7 @@ def mir_func(f, thefilter):
             if isinstance(v, pathlib.Path):
                 v = str(v)
                 kw[k] = v
-            if k in ('tin', 'out') or match_in(k):
+            if k in ('tin', 'out', 'vis', 'model') or match_in(k):
                 if not isinstance(v, list) and ',' not in v:
                     if len(str(v)) > MIR_CHAR_LIMIT:
                         reformat_args = True
