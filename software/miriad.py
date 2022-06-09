@@ -16,6 +16,7 @@ from . import common as sfuncs
 from ..miscellaneous import error_handling as errh, decorators
 
 MIR_CHAR_LIMIT = 64
+LONG_KEYS = ('tin', 'out', 'vis', 'model')
 
 if sfuncs.which('miriad') is None:
     errh.raise_error(ImportError, "miriad is not in your PATH")
@@ -41,7 +42,6 @@ def mir_func(f, thefilter):
     from .. import LOGGER
 
     def func(*args, **kw):
-
         # Added to provide shortened parameter names so miriad's maximum
         # character limit is not exceeded
         original_args = to_args(kw)
@@ -51,7 +51,7 @@ def mir_func(f, thefilter):
             if isinstance(v, pathlib.Path):
                 v = str(v)
                 kw[k] = v
-            if k in ('tin', 'out', 'vis', 'model') or match_in(k):
+            if k in LONG_KEYS or match_in(k):
                 if not isinstance(v, list) and ',' not in v:
                     if len(str(v)) > MIR_CHAR_LIMIT:
                         reformat_args = True
@@ -78,7 +78,7 @@ def mir_func(f, thefilter):
                 if isinstance(v, pathlib.Path):
                     v = str(v)
                 if not isinstance(v, list) and ',' not in v:
-                    if k in ('tin', 'out') or match_in(k):
+                    if k in LONG_KEYS or match_in(k):
                         next_path_name = chr(ord_num)
 
                         next_path = pathlib.Path(next_path_name)
