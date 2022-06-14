@@ -5,12 +5,13 @@ import subprocess
 import logging
 import argparse
 import pathlib
+from typing import Union, Tuple, List
 from datetime import datetime
 
 from tqdm import tqdm
 import numpy as np
 from astropy.io import fits
-from astropy.time import TimeDelta
+from astropy.time import TimeDelta, Time
 import astropy.units as u
 
 import farm
@@ -26,6 +27,79 @@ from farm.software.oskar import set_oskar_sim_beam_pattern, set_oskar_sim_interf
 from farm.software.oskar import run_oskar_sim_beam_pattern, run_oskar_sim_interferometer
 from farm import LOGGER
 
+
+def ionosphere():
+    if cfg.calibration.tec and not model_only:
+        if cfg.calibration.tec.create:
+            LOGGER.info(
+                f"Creating TEC screens from scratch for {len(scan_times)} scans"
+            )
+            iono_root = cfg.output_dcy / 'iono_tec_'
+            for i, (t_scan_start, t_scan_end) in tqdm(enumerate(scan_times),
+                                                      desc='Creating TEC'):
+                duration = (t_scan_end - t_scan_start).to_value('s')
+                tec_fitsfile = iono_root.append(
+                    str(i).zfill(len(str(len(scan_times)))) + '.fits'
+                )
+                farm.calibration.tec.create_tec_screen(
+                    tec_fitsfile, np.mean(cfg.correlator.frequencies), 20., 20e3,
+                    cfg.correlator.t_int, duration, cfg.calibration.noise.seed
+                )
+                cfg.calibration.tec.image.append(tec_fitsfile)
+
+            LOGGER.info(f"TEC screens saved to "
+                        f"{','.join([_.name for _ in cfg.calibration.tec.image])}")
+        else:
+            # TODO: Code here to ensure that TEC images match up with desired scan
+            #  times
+            def check_tec_image_compatibility(configuration, tec_images):
+                pass
+            LOGGER.info("Checking compatibility of TEC .fits images with scans")
+            check_tec_image_compatibility(cfg, cfg.calibration.tec.image)
+    else:
+        LOGGER.info("Not including TEC")
+
+
+def determine_scan_times(
+        cfg: loader.FarmConfiguration, save_plot: Union[bool, pathlib.Path]
+) -> List[Tuple[Time, Time], ...]:
+    LOGGER.info("Computing scan times")
+    # Compute scan times
+    scan_times = ast.scan_times(
+        cfg.observation.time, cfg.field.coord0, cfg.telescope.location,
+        cfg.observation.n_scan, cfg.observation.t_total,
+        cfg.observation.min_elevation, cfg.observation.min_gap_scan,
+        partial_scans_allowed=False
+    )
+
+    # Round end times to sensible values consistent with visibility integration
+    # times
+    # for i, (t_scan_start, t_scan_end) in enumerate(scan_times):
+    #     n_ints = int((t_scan_end - t_scan_start).to_value('s') //
+    #                  cfg.correlator.t_int)
+    #     scan_duration = n_ints * cfg.correlator.t_int
+    #     t_scan_end = t_scan_start + TimeDelta(scan_duration * u.s)
+    #     scan_times[i] = (t_scan_start, t_scan_end)
+
+    msg = 'Computed scan times are:\n'
+    for idx, (start, end) in enumerate(scan_times):
+        msg += (
+            f"\tScan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
+            f" to {end.strftime('%d%b%Y %H:%M:%S').upper()} "
+            f"({(end - start).to_value('s'):.1f}s)\n")
+    for line in msg:
+        LOGGER.info(line)
+
+    # Produce plot of elevation curve and proposed scans
+    if save_plot:
+        LOGGER.info(f"Saving elevation plot to {elevation_plot}")
+        plotting.target_altaz(
+            cfg.observation.time, cfg.telescope.location,
+            cfg.field.coord0, scan_times=scan_times,
+            savefig=save_plot
+        )
+
+    return scan_times
 
 # ############################################################################ #
 # ############ Parse configuration from file or from command-line ############ #
@@ -76,7 +150,6 @@ if not cfg.output_dcy.exists():
 
 sbeam_ini = cfg.output_dcy.joinpath(f'{cfg.root_name}_sim_beam.ini')
 sinterferometer_ini = pathlib.Path(f"{cfg.root_name}_sim_interferometer.ini")
-sbeam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
 out_ms = cfg.root_name / '.ms'
 out_msm = cfg.root_name / '.msm'
 # ############################################################################ #
@@ -85,39 +158,9 @@ out_msm = cfg.root_name / '.msm'
 # ############################################################################ #
 scan_times = None
 if not model_only:
-    LOGGER.info("Computing scan times")
-    # Compute scan times
-    scan_times = ast.scan_times(
-        cfg.observation.time, cfg.field.coord0, cfg.telescope.location,
-        cfg.observation.n_scan, cfg.observation.t_total,
-        cfg.observation.min_elevation, cfg.observation.min_gap_scan,
-        partial_scans_allowed=False
-    )
-
-    # Round end times to sensible values consistent with visibility integration
-    # times
-    for i, (t_scan_start, t_scan_end) in enumerate(scan_times):
-        n_ints = int((t_scan_end - t_scan_start).to_value('s') //
-                     cfg.correlator.t_int)
-        scan_duration = n_ints * cfg.correlator.t_int
-        t_scan_end = t_scan_start + TimeDelta(scan_duration * u.s)
-        scan_times[i] = (t_scan_start, t_scan_end)
-
-    msg = 'Computed scan times are:\n'
-    for idx, (start, end) in enumerate(scan_times):
-        msg += f"Scan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()} " \
-               f"to {end.strftime('%d%b%Y %H:%M:%S').upper()} " \
-               f"({(end - start).to_value('s'):.1f}s)\n"
-    LOGGER.info(msg)
-
-    # Produce plot of elevation curve and proposed scans
     elevation_plot = cfg.output_dcy / "elevation_curve.pdf"
-    LOGGER.info(f"Saving elevation plot to {elevation_plot}")
-    plotting.target_altaz(
-        cfg.observation.time, cfg.telescope.location,
-        cfg.field.coord0, scan_times=scan_times,
-        savefig=elevation_plot
-    )
+    scan_times = determine_scan_times(cfg, elevation_plot)
+
 # ############################################################################ #
 # ###################### TEC/Ionospheric calibration/effect ################## #
 # ############################################################################ #
@@ -557,6 +600,10 @@ if not model_only:
     LOGGER.info("Running synthetic observations")
     for icut, (t_scan_start, t_scan_end) in enumerate(scan_times):
         t_scan = (t_scan_end - t_scan_start).to_value('s')
+
+        # TODO:
+        #  Below code block into create_beam_pattern_image method
+        sbeam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
         sbeam_root = cfg.root_name.append(f"_scan{icut}")
         sbeam_name = sbeam_root.append(sbeam_sfx)
         sbeam_fname = sbeam_name.append('.fits')
@@ -583,6 +630,23 @@ if not model_only:
         sbmout_cut = cfg.root_name.append('_ICUT_' + sicut)
         sbmout_fcut = cfg.root_name.append('_ICUT_' + sicut + '.fits')
 
+        sbmout_hdu.header.set('CTYPE1', 'RA---SIN')
+        sbmout_hdu.header.set('CTYPE2', 'DEC--SIN')
+        sbmout_hdu.header.set('CTYPE3', 'FREQ    ')
+        sbmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
+        sbmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
+        sbmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
+        sbmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
+        sbmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
+        sbmout_hdu.header.set('CRPIX3', 1)
+        sbmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
+        sbmout_hdu.header.set('CDELT2', cfg.field.cdelt)
+        sbmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
+        sbmout_hdu.header.set('CUNIT1', 'deg     ')
+        sbmout_hdu.header.set('CUNIT2', 'deg     ')
+        sbmout_hdu.header.set('CUNIT3', 'Hz      ')
+        sbmout_hdu.writeto(sbmout_fcut, overwrite=True)
+
         # TODO: This is where we left off. Correct below to be farm-compatible
         #  code
         gsm = pathlib.Path(str(cfg.sky_model.image).rstrip('.fits'))
@@ -603,23 +667,6 @@ if not model_only:
         out_uvcut = cfg.root_name.append('_ICUT_' + sicut + 'out.uv')
         out_mscut = cfg.root_name.append('_ICUT_' + sicut + 'out.ms')
         out_uvfcut = cfg.root_name.append('_ICUT_' + sicut + 'out.uvf')
-
-        sbmout_hdu.header.set('CTYPE1', 'RA---SIN')
-        sbmout_hdu.header.set('CTYPE2', 'DEC--SIN')
-        sbmout_hdu.header.set('CTYPE3', 'FREQ    ')
-        sbmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
-        sbmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
-        sbmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
-        sbmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
-        sbmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
-        sbmout_hdu.header.set('CRPIX3', 1)
-        sbmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
-        sbmout_hdu.header.set('CDELT2', cfg.field.cdelt)
-        sbmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
-        sbmout_hdu.header.set('CUNIT1', 'deg     ')
-        sbmout_hdu.header.set('CUNIT2', 'deg     ')
-        sbmout_hdu.header.set('CUNIT3', 'Hz      ')
-        sbmout_hdu.writeto(sbmout_fcut, overwrite=True)
 
         LOGGER.info(f"Multiplying sky model by beam response, {sbmout_cut}")
         if sbmout_cut.exists():
@@ -683,7 +730,7 @@ if not model_only:
                        gnoise=cfg.calibration.gains.amp_err)
         miriad.fits(op='uvout', _in=out_uvcut, out=out_uvfcut)
 
-        script_line0 = f'importuvfits(vis={out_mscut}, fitsfile={out_uvfcut})\n'
+        script_line0 = f'importuvfits(vis="{out_mscut}", fitsfile="{out_uvfcut}")\n'
         with open('_casa_script.py', 'w') as f:
             f.write(script_line0)
 
