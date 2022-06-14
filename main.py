@@ -62,7 +62,7 @@ def ionosphere():
 
 def determine_scan_times(
         cfg: loader.FarmConfiguration, save_plot: Union[bool, pathlib.Path]
-) -> List[Tuple[Time, Time], ...]:
+) -> List[Tuple[Time, Time]]:
     LOGGER.info("Computing scan times")
     # Compute scan times
     scan_times = ast.scan_times(
