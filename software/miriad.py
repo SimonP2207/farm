@@ -36,6 +36,17 @@ def mir_commands():
                     cmd.endswith('.exe'))]
 
 
+def _remove_path(path):
+    if isinstance(path, str):
+        path = pathlib.Path(str)
+
+    if path.exists():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
 @decorators.log_errors_warnings
 def mir_func(f, thefilter):
     """Wrapper around miriad system calls"""
@@ -52,41 +63,35 @@ def mir_func(f, thefilter):
                 v = str(v)
                 kw[k] = v
             if k in LONG_KEYS or match_in(k):
-                if not isinstance(v, list) and ',' not in v:
+                if ',' in v:
+                    v = v.split(',')
+                if not isinstance(v, list):
                     if len(str(v)) > MIR_CHAR_LIMIT:
                         reformat_args = True
                         break
-                elif isinstance(v, list):
+                else:
                     for v_ in v:
                         if len(str(v_)) > MIR_CHAR_LIMIT:
                             reformat_args = True
                             break
-                elif ',' in v:
-                    for v_ in v.split(','):
-                        if len(str(v_)) > MIR_CHAR_LIMIT:
-                            reformat_args = True
-                            break
-                else:
-                    raise ValueError(f'help -> {k}={v}')
-
+        # If shortening of key-values is required, shorten to single letter
+        # names, starting from 'A'
         if reformat_args:
             mv_dict = {}
-            ord_num = 65
+            ord_num = ord('A')
             for k, v in kw.items():
                 if len(str(v)) <= MIR_CHAR_LIMIT:
                     continue
                 if isinstance(v, pathlib.Path):
                     v = str(v)
-                if not isinstance(v, list) and ',' not in v:
+
+                if ',' in v:
+                    v = v.split(',')
+
+                if not isinstance(v, list):
                     if k in LONG_KEYS or match_in(k):
                         next_path_name = chr(ord_num)
-
-                        next_path = pathlib.Path(next_path_name)
-                        if next_path.exists():
-                            if next_path.is_dir():
-                                shutil.rmtree(next_path)
-                            else:
-                                next_path.unlink()
+                        _remove_path(pathlib.Path(next_path_name))
 
                         ord_num += 1
                         if puthd and match_in(k):
@@ -97,40 +102,15 @@ def mir_func(f, thefilter):
                             mv_dict[next_path_name] = v
                             kw[k] = next_path_name
                 else:
-                    if isinstance(v, list):
-                        new_v = []
-                        for v_ in v:
-                            next_path_name = chr(ord_num)
+                    new_v = []
+                    for v_ in v:
+                        next_path_name = chr(ord_num)
+                        _remove_path(pathlib.Path(next_path_name))
 
-                            next_path = pathlib.Path(next_path_name)
-                            if next_path.exists():
-                                if next_path.is_dir():
-                                    shutil.rmtree(next_path)
-                                else:
-                                    next_path.unlink()
-
-                            ord_num += 1
-                            mv_dict[next_path_name] = v_
-                            new_v.append(next_path_name)
+                        ord_num += 1
+                        mv_dict[next_path_name] = v_
+                        new_v.append(next_path_name)
                         kw[k] = new_v
-                    elif ',' in v:
-                        new_v = []
-                        for v_ in v.split(','):
-                            next_path_name = chr(ord_num)
-
-                            next_path = pathlib.Path(next_path_name)
-                            if next_path.exists():
-                                if next_path.is_dir():
-                                    shutil.rmtree(next_path)
-                                else:
-                                    next_path.unlink()
-
-                            ord_num += 1
-                            mv_dict[next_path_name] = v_
-                            new_v.append(v_)
-                        kw[k] = ','.join(new_v)
-                    else:
-                        raise ValueError(f'help -> {k}={v}')
 
             # In case of shortened input args, rename original to shortened
             for k, v in mv_dict.items():
@@ -141,35 +121,8 @@ def mir_func(f, thefilter):
             kw["_in"] = args[0]
         args = to_args(kw)
 
-        # SJDP added: 14/02/2022, for no-limit character-length input parameters
-        # In case any of the args have values > 64 characters long. However,
-        # this doesn't work even though the miriad user guide says using @file
-        # containing long parameter values is ok.
-        # TODO: Have to modify miriad's key.for file and recompile for increased
-        #  buffer sizes
-        # created_param_files = []
-        # for idx, arg in enumerate(args):
-        #     k, v = arg.split("=")
-        #     if len(v) >= 0:
-        #         param_file = pathlib.Path(f"{k}_param")
-        #         if param_file.exists():
-        #             param_file.unlink()
-        #         with open(param_file, 'wt') as p:
-        #             p.write(v)
-        #         args[idx] = f"{k}=@{param_file}"
-        #         created_param_files.append(param_file)
-        #
-        # temp_def_file = pathlib.Path(f"{f}.def")
-        # if temp_def_file.exists():
-        #     temp_def_file.unlink()
-        #
-        # with open(temp_def_file, 'wt') as def_file:
-        #     def_file.write('\n'.join(args))
-        #
-        # proc = subprocess.Popen([f, '-f', temp_def_file], shell=False,
-        #                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Execute miriad task with arguments
         LOGGER.info(' '.join([f] + original_args))
-
         proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
@@ -202,17 +155,29 @@ def mir_func(f, thefilter):
             msg += "\n".join(warns)
             LOGGER.warning(msg)
 
+        # Rename shortened file/directory names back to originals
         if reformat_args:
             # In case of shortened input args, rename back to original
             for k, v in mv_dict.items():
-                os.rename(k, v)
+                try:
+                    os.rename(k, v)
+                except FileNotFoundError as err:
+                    # Raise exception that renamed file/directory not present
+                    # ONLY if miriad ran without errors. In that case, miriad
+                    # wouldn't produce output files/directories and renaming
+                    # will fail with error. Therefore, skip the error and rename
+                    # any input files to ensure the MiriadError below is raised
+                    if proc.returncode == 0:
+                        raise err
 
         if proc.returncode != 0:
             LOGGER.error("\n".join(errors))
             raise MiriadError("\n".join(errors))
+
         out = stdout.strip()
         if thefilter is not None:
             return thefilter(out)
+
         return out
 
     return func
