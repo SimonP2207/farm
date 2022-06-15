@@ -437,13 +437,13 @@ class SkyModelConfiguration:
     extragal_known: Union[bool, SkyComponentConfiguration]
     extragal_trecs: Union[bool, SkyComponentConfiguration]
 
+
 @dataclass
 class SkyModelConfiguration:
     h21cm: Union[bool, EoR21cmConfiguration]
     ateam: Union[bool, ATeamConfiguration]
     galactic: Union[bool, GalacticConfiguration]
     extragalactic: Union[bool, ExtragalacticConfiguration]
-
 
 
 class FarmConfiguration:
@@ -591,6 +591,9 @@ class FarmConfiguration:
                                 f'{self.root_name}_sky_model.fits')
         self.oskar_sky_model_file = self.output_dcy / 'oskar_sky_sources.data'
 
+        self.sbeam_ini = self.setup_sim_beam_pattern_ini()
+        self.sinterferometer_ini = self.setup_sim_interferometer_ini()
+
         # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
         #  DECIDE WHETHER TO WRITE AND USE AN INI FILE OR TO USE OSKAR'S
         #  PYTHON IMPLEMENTATION
@@ -598,3 +601,121 @@ class FarmConfiguration:
         self.oskar_sim_interferometer_settings = oskar.SettingsTree(
             'oskar_sim_interferometer'
         )
+
+    def setup_sim_interferometer_ini(self):
+        """
+        Sets up .ini file for oskar's sim_interferometer task from configuration
+        parameters
+        """
+        from ..software.oskar import set_oskar_sim_interferometer
+
+        ini_file = Path(f"{self.root_name}_sim_interferometer.ini")
+
+        LOGGER.info("Setting up interferometer .ini files")
+        with open(ini_file, 'wt') as f:
+            set_oskar_sim_interferometer(f, 'simulator/double_precision',
+                                         'TRUE')
+            set_oskar_sim_interferometer(f, 'simulator/use_gpus', 'FALSE')
+            set_oskar_sim_interferometer(f, 'simulator/max_sources_per_chunk',
+                                         '4096')
+
+            set_oskar_sim_interferometer(f, 'observation/phase_centre_ra_deg',
+                                         self.field.coord0.ra.deg)
+            set_oskar_sim_interferometer(f, 'observation/phase_centre_dec_deg',
+                                         self.field.coord0.dec.deg)
+            set_oskar_sim_interferometer(f, 'observation/start_frequency_hz',
+                                         self.correlator.freq_min)
+            set_oskar_sim_interferometer(f, 'observation/num_channels',
+                                         self.correlator.n_chan)
+            set_oskar_sim_interferometer(f, 'observation/frequency_inc_hz',
+                                         self.correlator.freq_inc)
+            set_oskar_sim_interferometer(f, 'telescope/input_directory',
+                                         self.telescope.model)
+            set_oskar_sim_interferometer(
+                f, 'telescope/allow_station_beam_duplication', 'TRUE'
+            )
+            set_oskar_sim_interferometer(f, 'telescope/pol_mode', 'Scalar')
+
+            # Add in ionospheric screen model
+            set_oskar_sim_interferometer(f, 'telescope/ionosphere_screen_type',
+                                         'External')
+            set_oskar_sim_interferometer(f,
+                                         'interferometer/channel_bandwidth_hz',
+                                         self.correlator.chan_width)
+            set_oskar_sim_interferometer(f, 'interferometer/time_average_sec',
+                                         self.correlator.t_int)
+            set_oskar_sim_interferometer(f,
+                                         'interferometer/ignore_w_components',
+                                         'FALSE')
+
+            # Add in Telescope noise model via files where rms has been tuned
+            set_oskar_sim_interferometer(
+                f, 'interferometer/noise/enable',
+                True if self.calibration.noise else False
+            )
+            set_oskar_sim_interferometer(f, 'interferometer/noise/seed',
+                                         self.calibration.noise.seed)
+            set_oskar_sim_interferometer(f, 'interferometer/noise/freq', 'Data')
+            set_oskar_sim_interferometer(f, 'interferometer/noise/freq/file',
+                                         self.calibration.noise.sefd_freq_file)
+            set_oskar_sim_interferometer(f, 'interferometer/noise/rms', 'Data')
+            set_oskar_sim_interferometer(f, 'interferometer/noise/rms/file',
+                                         self.calibration.noise.sefd_rms_file)
+            set_oskar_sim_interferometer(f, 'sky/fits_image/file',
+                                         self.sky_model.image)
+            set_oskar_sim_interferometer(f, 'sky/fits_image/default_map_units',
+                                         'K')
+
+        return ini_file
+
+    def setup_sim_beam_pattern_ini(self):
+        """
+        Sets up .ini file for oskar's sim_beam_pattern task from configuration
+        parameters
+        """
+        from ..software.oskar import set_oskar_sim_beam_pattern
+
+        ini_file = Path(f'{self.root_name}_sim_beam.ini')
+
+        LOGGER.info(f"Setting up oskar's sim_beam_pattern .ini file, "
+                    f"{ini_file}")
+        with open(ini_file, 'wt') as f:
+            set_oskar_sim_beam_pattern(f, "simulator/double_precision", False)
+            set_oskar_sim_beam_pattern(f, "observation/phase_centre_ra_deg",
+                                       self.field.coord0.ra.deg)
+            set_oskar_sim_beam_pattern(f, "observation/phase_centre_dec_deg",
+                                       self.field.coord0.dec.deg)
+            set_oskar_sim_beam_pattern(f, "observation/start_frequency_hz",
+                                       self.correlator.freq_min)
+            set_oskar_sim_beam_pattern(f, "observation/num_channels",
+                                       self.correlator.n_chan)
+            set_oskar_sim_beam_pattern(f, "observation/frequency_inc_hz",
+                                       self.correlator.freq_inc)
+            set_oskar_sim_beam_pattern(f, "observation/num_time_steps", 1)
+            set_oskar_sim_beam_pattern(f, "telescope/input_directory",
+                                       self.telescope.model)
+            set_oskar_sim_beam_pattern(f, "telescope/pol_mode",
+                                       "Scalar")
+            set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/fov_deg",
+                                       self.field.fov[0])
+            set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size",
+                                       self.field.nx)
+            set_oskar_sim_beam_pattern(
+                f, "beam_pattern/station_outputs/fits_image/auto_power", True
+            )
+
+        return ini_file
+
+    def set_oskar_sim_interferometer(self, key, value):
+        """Wrapper around farm.software.oskar.set_oskar_sim_interferometer"""
+        from ..software.oskar import set_oskar_sim_interferometer
+
+        with open(self.sinterferometer_ini, 'at') as f:
+            set_oskar_sim_interferometer(f, key, value)
+
+    def set_oskar_sim_beam_pattern(self, key, value):
+        """Wrapper around farm.software.oskar.set_oskar_sim_beam_pattern"""
+        from ..software.oskar import set_oskar_sim_beam_pattern
+
+        with open(self.sbeam_ini, 'at') as f:
+            set_oskar_sim_beam_pattern(f, key, value)

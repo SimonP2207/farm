@@ -5,14 +5,13 @@ import subprocess
 import logging
 import argparse
 import pathlib
-from typing import Union, Tuple, List
+from typing import Union, Tuple, List, Optional
 from datetime import datetime
 
 from tqdm import tqdm
 import numpy as np
 from astropy.io import fits
-from astropy.time import TimeDelta, Time
-import astropy.units as u
+from astropy.time import Time
 
 import farm
 import farm.data.loader as loader
@@ -21,85 +20,142 @@ import farm.miscellaneous as misc
 import farm.miscellaneous.error_handling as errh
 import farm.miscellaneous.plotting as plotting
 import farm.sky_model.tb_functions as tb_funcs
+from farm.software import casa
 from farm.software.miriad import miriad
 from farm.software import oskar
-from farm.software.oskar import set_oskar_sim_beam_pattern, set_oskar_sim_interferometer
-from farm.software.oskar import run_oskar_sim_beam_pattern, run_oskar_sim_interferometer
+from farm.software.oskar import (run_oskar_sim_beam_pattern,
+                                 run_oskar_sim_interferometer)
 from farm import LOGGER
 
 
-def ionosphere():
-    if cfg.calibration.tec and not model_only:
-        if cfg.calibration.tec.create:
-            LOGGER.info(
-                f"Creating TEC screens from scratch for {len(scan_times)} scans"
-            )
-            iono_root = cfg.output_dcy / 'iono_tec_'
-            for i, (t_scan_start, t_scan_end) in tqdm(enumerate(scan_times),
-                                                      desc='Creating TEC'):
-                duration = (t_scan_end - t_scan_start).to_value('s')
-                tec_fitsfile = iono_root.append(
-                    str(i).zfill(len(str(len(scan_times)))) + '.fits'
-                )
-                farm.calibration.tec.create_tec_screen(
-                    tec_fitsfile, np.mean(cfg.correlator.frequencies), 20., 20e3,
-                    cfg.correlator.t_int, duration, cfg.calibration.noise.seed
-                )
-                cfg.calibration.tec.image.append(tec_fitsfile)
+def create_tec_screens(farm_cfg: loader.FarmConfiguration,
+                       tec_prefix: str,
+                       logger: Optional[logging.Logger] = None
+                       ) -> List[pathlib.Path]:
+    """
+    Calculates and plots scan times for a farm configuration. Also optionally
+    logs results/operations
 
-            LOGGER.info(f"TEC screens saved to "
-                        f"{','.join([_.name for _ in cfg.calibration.tec.image])}")
-        else:
-            # TODO: Code here to ensure that TEC images match up with desired scan
-            #  times
-            def check_tec_image_compatibility(configuration, tec_images):
-                pass
-            LOGGER.info("Checking compatibility of TEC .fits images with scans")
-            check_tec_image_compatibility(cfg, cfg.calibration.tec.image)
-    else:
-        LOGGER.info("Not including TEC")
+    Parameters
+    ----------
+    farm_cfg
+        FarmConfiguration instance to parse information from
+    tec_prefix
+        Prefix to append to ionospheric TEC .fits files
+    logger
+        logging.Logger instance to log messages to
+
+    Returns
+    -------
+    None
+    """
+    if logger:
+        logger.info(
+            f"Creating TEC screens from scratch for {len(scan_times)} scans"
+        )
+
+    tec_root = farm_cfg.output_dcy / tec_prefix
+    created_tec_fitsfiles = []
+    for i, (t_start, t_end) in tqdm(enumerate(scan_times),
+                                              desc='Creating TEC'):
+        duration = (t_end - t_start).to_value('s')
+        tec_fitsfile = tec_root.append(
+            str(i).zfill(len(str(len(scan_times)))) + '.fits'
+        )
+        farm.calibration.tec.create_tec_screen(
+            tec_fitsfile, np.mean(farm_cfg.correlator.frequencies), 20., 20e3,
+            farm_cfg.correlator.t_int, duration, farm_cfg.calibration.noise.seed
+        )
+        created_tec_fitsfiles.append(tec_fitsfile)
+
+    if logger:
+        logger.info(
+            f"TEC screens saved to "
+            f"{','.join([_.name for _ in farm_cfg.calibration.tec.image])}"
+        )
+
+    return created_tec_fitsfiles
 
 
-def determine_scan_times(
-        cfg: loader.FarmConfiguration, save_plot: Union[bool, pathlib.Path]
-) -> List[Tuple[Time, Time]]:
-    LOGGER.info("Computing scan times")
+# TODO: Write check_tec_image_compatibility method
+def check_tec_image_compatibility(farm_cfg: loader.FarmConfiguration,
+                                  tec_images: List[pathlib.Path]
+                                  ) -> Tuple[bool, str]:
+    """
+    Checks whether a list of TEC fits files is compatible with the observation
+    specified within a FarmConfiguration instance
+
+    Parameters
+    ----------
+    farm_cfg
+        FarmConfiguration instance to parse information from
+    tec_images
+        List of paths to TEC-screen fits-files
+
+    Returns
+    -------
+    Tuple of (bool, str) whereby the bool indicates compatibility and the str is
+    contains the reason for incompatibility if False (empty string if True)
+    """
+    return True, ""
+
+
+def determine_scan_times(farm_cfg: loader.FarmConfiguration,
+                         save_plot: Union[bool, pathlib.Path],
+                         logger: Optional[logging.Logger] = None
+                         ) -> Tuple[Tuple[Time, Time], ...]:
+    """
+    Calculates and plots scan times for a farm configuration. Also optionally
+    logs results/operations
+
+    Parameters
+    ----------
+    farm_cfg
+        FarmConfiguration instance to parse information from
+    save_plot
+        Whether to plot the scan times as an altitude/azimuth plot over the
+        duration of the obseration. If False, no plot is produced, otherwise a
+        pathlib.Path must be given to save the resulting plot to
+    logger
+        logging.Logger instance to log messages to
+
+    Returns
+    -------
+    Tuple containing two-tuples of (astropy.time.Time, astropy.time.Time)
+    representing scan start/end times
+    """
+    if logger:
+        logger.info("Computing scan times")
+
     # Compute scan times
-    scan_times = ast.scan_times(
-        cfg.observation.time, cfg.field.coord0, cfg.telescope.location,
-        cfg.observation.n_scan, cfg.observation.t_total,
-        cfg.observation.min_elevation, cfg.observation.min_gap_scan,
-        partial_scans_allowed=False
+    scans = ast.scan_times(
+        farm_cfg.observation.time, farm_cfg.field.coord0,
+        farm_cfg.telescope.location, farm_cfg.observation.n_scan,
+        farm_cfg.observation.t_total, farm_cfg.observation.min_elevation,
+        farm_cfg.observation.min_gap_scan, partial_scans_allowed=False
     )
 
-    # Round end times to sensible values consistent with visibility integration
-    # times
-    # for i, (t_scan_start, t_scan_end) in enumerate(scan_times):
-    #     n_ints = int((t_scan_end - t_scan_start).to_value('s') //
-    #                  cfg.correlator.t_int)
-    #     scan_duration = n_ints * cfg.correlator.t_int
-    #     t_scan_end = t_scan_start + TimeDelta(scan_duration * u.s)
-    #     scan_times[i] = (t_scan_start, t_scan_end)
-
-    msg = 'Computed scan times are:\n'
-    for idx, (start, end) in enumerate(scan_times):
-        msg += (
-            f"\tScan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
-            f" to {end.strftime('%d%b%Y %H:%M:%S').upper()} "
-            f"({(end - start).to_value('s'):.1f}s)\n")
-    for line in msg:
-        LOGGER.info(line)
+    if logger:
+        msg = 'Computed scan times are:\n'
+        for idx, (start, end) in enumerate(scans):
+            msg += (
+                f"\tScan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
+                f" to {end.strftime('%d%b%Y %H:%M:%S').upper()} "
+                f"({(end - start).to_value('s'):.1f}s)\n")
+        for line in msg.split('\n'):
+            logger.info(line)
 
     # Produce plot of elevation curve and proposed scans
     if save_plot:
-        LOGGER.info(f"Saving elevation plot to {elevation_plot}")
+        logger.info(f"Saving elevation plot to {save_plot}")
         plotting.target_altaz(
-            cfg.observation.time, cfg.telescope.location,
-            cfg.field.coord0, scan_times=scan_times,
+            farm_cfg.observation.time, farm_cfg.telescope.location,
+            farm_cfg.field.coord0, scan_times=scans,
             savefig=save_plot
         )
 
-    return scan_times
+    return tuple(scans)
+
 
 # ############################################################################ #
 # ############ Parse configuration from file or from command-line ############ #
@@ -112,20 +168,24 @@ if len(sys.argv) != 1:
     parser.add_argument("-m", "--model-only",
                         help="Compute and output sky model only",
                         action="store_true")
+    parser.add_argument("-d", "--debug",
+                        help="Set terminal log output to verbose levels",
+                        action="store_true")
     args = parser.parse_args()
     config_file = pathlib.Path(args.config_file)
     model_only = args.model_only
+    log_level = logging.DEBUG if args.debug else logging.INFO
 else:
     config_file = pathlib.Path(farm.data.FILES['EXAMPLE_CONFIG'])
     model_only = True
+    log_level = logging.DEBUG
 
 cfg = loader.FarmConfiguration(config_file)
 # ############################################################################ #
-# ######################## SET UP THE LOGGER ################################# #
+# ######################## Set up the logger ################################# #
 # ############################################################################ #
 now = datetime.now()
-logfile = f'farm{now.strftime("%Y%b%d_%H%M%S").upper()}.log'
-logfile = cfg.output_dcy / logfile
+logfile = cfg.output_dcy / f'farm{now.strftime("%Y%b%d_%H%M%S").upper()}.log'
 LOGGER.setLevel(logging.DEBUG)
 
 # Set up handler for writing log messages to log file
@@ -139,61 +199,40 @@ LOGGER.addHandler(file_handler)
 # Set up handler to print to console
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(log_formatter)
-console_handler.setLevel(logging.INFO)  # TODO: Parse this from a cl arg
+console_handler.setLevel(log_level)
 LOGGER.addHandler(console_handler)
 # ############################################################################ #
-# ########################### DEFINE VARIOUS FILE NAMES ###################### #
+# ########### Create run's root directory if it doesn't exists ############### #
 # ############################################################################ #
 if not cfg.output_dcy.exists():
     LOGGER.info(f"Creating output directory, {cfg.output_dcy}")
     cfg.output_dcy.mkdir(exist_ok=True)
-
-sbeam_ini = cfg.output_dcy.joinpath(f'{cfg.root_name}_sim_beam.ini')
-sinterferometer_ini = pathlib.Path(f"{cfg.root_name}_sim_interferometer.ini")
-out_ms = cfg.root_name / '.ms'
-out_msm = cfg.root_name / '.msm'
 # ############################################################################ #
 # ############ Determine scan times and produce diagnostic plots ############# #
-# TODO: Clean this section up and place in farm.loader.FarmConfiguration class #
 # ############################################################################ #
-scan_times = None
+scan_times = ()
 if not model_only:
-    elevation_plot = cfg.output_dcy / "elevation_curve.pdf"
-    scan_times = determine_scan_times(cfg, elevation_plot)
-
+    scan_times = determine_scan_times(
+        cfg, cfg.output_dcy / "elevation_curve.pdf", LOGGER
+    )
 # ############################################################################ #
 # ###################### TEC/Ionospheric calibration/effect ################## #
 # ############################################################################ #
 if cfg.calibration.tec and not model_only:
     if cfg.calibration.tec.create:
-        LOGGER.info(
-            f"Creating TEC screens from scratch for {len(scan_times)} scans"
+        cfg.calibration.tec.image.append(
+            create_tec_screens(cfg, tec_prefix='iono_tec', logger=LOGGER)
         )
-        iono_root = cfg.output_dcy / 'iono_tec_'
-        for i, (t_scan_start, t_scan_end) in tqdm(enumerate(scan_times),
-                                                  desc='Creating TEC'):
-            duration = (t_scan_end - t_scan_start).to_value('s')
-            tec_fitsfile = iono_root.append(
-                str(i).zfill(len(str(len(scan_times)))) + '.fits'
-            )
-            farm.calibration.tec.create_tec_screen(
-                tec_fitsfile, np.mean(cfg.correlator.frequencies), 20., 20e3,
-                cfg.correlator.t_int, duration, cfg.calibration.noise.seed
-            )
-            cfg.calibration.tec.image.append(tec_fitsfile)
-
-        LOGGER.info(f"TEC screens saved to "
-                    f"{','.join([_.name for _ in cfg.calibration.tec.image])}")
     else:
-        # TODO: Code here to ensure that TEC images match up with desired scan
-        #  times
-        def check_tec_image_compatibility(configuration, tec_images):
-            pass
-        LOGGER.info("Checking compatibility of TEC .fits images with scans")
-        check_tec_image_compatibility(cfg, cfg.calibration.tec.image)
+        tec_compatible = check_tec_image_compatibility(
+            cfg, cfg.calibration.tec.image
+        )
+        if not tec_compatible[0]:
+            errh.raise_error(ValueError, tec_compatible[1])
+
+        LOGGER.info("Existing of TEC .fits images are compatible with scans")
 else:
     LOGGER.info("Not including TEC")
-# ############################################################################ #
 # ############################################################################ #
 # ########################  # # # # # # # # # # # # # # # #################### #
 # ########################## Initial set up of OSKAR ######################### #
@@ -208,87 +247,6 @@ if not model_only:
     sky_fov = oskar.Sky()
     sky_side_lobes = oskar.Sky()
 # ############################################################################ #
-# ###################### Calculate station beams with OSKAR ################## #
-# ############################################################################ #
-    LOGGER.info("Setting up station beam pattern .ini files")
-    with open(sbeam_ini, 'wt') as f:
-        set_oskar_sim_beam_pattern(f, "simulator/double_precision", False)
-        set_oskar_sim_beam_pattern(f, "observation/phase_centre_ra_deg",
-                                   cfg.field.coord0.ra.deg)
-        set_oskar_sim_beam_pattern(f, "observation/phase_centre_dec_deg",
-                                   cfg.field.coord0.dec.deg)
-        set_oskar_sim_beam_pattern(f, "observation/start_frequency_hz",
-                                   cfg.correlator.freq_min)
-        set_oskar_sim_beam_pattern(f, "observation/num_channels",
-                                   cfg.correlator.n_chan)
-        set_oskar_sim_beam_pattern(f, "observation/frequency_inc_hz",
-                                   cfg.correlator.freq_inc)
-        set_oskar_sim_beam_pattern(f, "observation/num_time_steps", 1)
-        set_oskar_sim_beam_pattern(f, "telescope/input_directory",
-                                   cfg.telescope.model)
-        set_oskar_sim_beam_pattern(f, "telescope/pol_mode",
-                                   "Scalar")
-        set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/fov_deg",
-                                   cfg.field.fov[0])
-        set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size",
-                                   cfg.field.nx)
-        set_oskar_sim_beam_pattern(
-            f, "beam_pattern/station_outputs/fits_image/auto_power", True
-        )
-
-# ############################################################################ #
-# #################### Calculate telescope model with OSKAR ################## #
-# ############################################################################ #
-    LOGGER.info("Setting up interferometer .ini files")
-    with open(sinterferometer_ini, 'wt') as f:
-        set_oskar_sim_interferometer(f, 'simulator/double_precision', 'TRUE')
-        set_oskar_sim_interferometer(f, 'simulator/use_gpus', 'FALSE')
-        set_oskar_sim_interferometer(f, 'simulator/max_sources_per_chunk',
-                                     '4096')
-
-        set_oskar_sim_interferometer(f, 'observation/phase_centre_ra_deg',
-                                     cfg.field.coord0.ra.deg)
-        set_oskar_sim_interferometer(f, 'observation/phase_centre_dec_deg',
-                                     cfg.field.coord0.dec.deg)
-        set_oskar_sim_interferometer(f, 'observation/start_frequency_hz',
-                                     cfg.correlator.freq_min)
-        set_oskar_sim_interferometer(f, 'observation/num_channels',
-                                     cfg.correlator.n_chan)
-        set_oskar_sim_interferometer(f, 'observation/frequency_inc_hz',
-                                     cfg.correlator.freq_inc)
-        set_oskar_sim_interferometer(f, 'telescope/input_directory',
-                                     cfg.telescope.model)
-        set_oskar_sim_interferometer(f,
-                                     'telescope/allow_station_beam_duplication',
-                                     'TRUE')
-        set_oskar_sim_interferometer(f, 'telescope/pol_mode', 'Scalar')
-
-        # Add in ionospheric screen model
-        set_oskar_sim_interferometer(f, 'telescope/ionosphere_screen_type',
-                                     'External')
-        set_oskar_sim_interferometer(f, 'interferometer/channel_bandwidth_hz',
-                                     cfg.correlator.chan_width)
-        set_oskar_sim_interferometer(f, 'interferometer/time_average_sec',
-                                     cfg.correlator.t_int)
-        set_oskar_sim_interferometer(f, 'interferometer/ignore_w_components',
-                                     'FALSE')
-
-        # Add in Telescope noise model via files where rms has been tuned
-        set_oskar_sim_interferometer(f, 'interferometer/noise/enable',
-                                     True if cfg.calibration.noise else False)
-        set_oskar_sim_interferometer(f, 'interferometer/noise/seed',
-                                     cfg.calibration.noise.seed)
-        set_oskar_sim_interferometer(f, 'interferometer/noise/freq', 'Data')
-        set_oskar_sim_interferometer(f, 'interferometer/noise/freq/file',
-                                     cfg.calibration.noise.sefd_freq_file)
-        set_oskar_sim_interferometer(f, 'interferometer/noise/rms', 'Data')
-        set_oskar_sim_interferometer(f, 'interferometer/noise/rms/file',
-                                     cfg.calibration.noise.sefd_rms_file)
-        set_oskar_sim_interferometer(f, 'sky/fits_image/file',
-                                     cfg.sky_model.image)
-        set_oskar_sim_interferometer(f, 'sky/fits_image/default_map_units',
-                                     'K')
-# ############################################################################ #
 # ############################################################################ #
 # #####################  # # # # # # # # # # # # # # # ####################### #
 # ########################### SkyModel Creation ############################## #
@@ -301,14 +259,13 @@ sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
 # ############################################################################ #
 # ################## Large-scale Galactic foreground model ################### #
 # ############################################################################ #
+gdsm = None
 if cfg.sky_model.galactic.large_scale_component.include:
     if cfg.sky_model.galactic.large_scale_component.create:
         LOGGER.info("Creating large-scale Galactic foreground images")
         gdsm = farm.sky_model.SkyComponent(
-            name='GDSM',
-            npix=(cfg.field.nx, cfg.field.ny),
-            cdelt=cfg.field.cdelt,
-            coord0=cfg.field.coord0,
+            name='GDSM', npix=(cfg.field.nx, cfg.field.ny),
+            cdelt=cfg.field.cdelt, coord0=cfg.field.coord0,
             tb_func=tb_funcs.gdsm2016_t_b
         )
         gdsm.add_frequency(cfg.correlator.frequencies)
@@ -337,11 +294,11 @@ else:
 # ############################################################################ #
 # ################ Small-scale Galactic foreground model ##################### #
 # ############################################################################ #
+gssm = None
 if cfg.sky_model.galactic.small_scale_component.include:
     if cfg.sky_model.galactic.small_scale_component.create:
         errh.raise_error(NotImplementedError,
                          "Currently can only load GSSM model from fits image")
-        sys.exit()
     else:
         fits_gssm = cfg.sky_model.galactic.small_scale_component.image
         if not fits_gssm.exists():
@@ -498,7 +455,7 @@ else:
 # ############################################################################ #
 # ###################### Simulated sources from T-RECs ####################### #
 # ############################################################################ #
-trecs_sources = None
+trecs = None
 if cfg.sky_model.extragalactic.artifical_component.include:
     LOGGER.info("Incorporating T-RECS artificial sources into low-SNR "
                 "extragalactic foreground component")
@@ -528,8 +485,9 @@ if cfg.sky_model.extragalactic.artifical_component.include:
         freqs=cfg.correlator.frequencies
     )
 
-    trecs = trecs.regrid(sky_model)
-    sky_model.add_component(trecs)
+    if trecs:
+        trecs = trecs.regrid(sky_model)
+        sky_model.add_component(trecs)
 
 else:
     LOGGER.info("Not including T-RECS sources into foreground")
@@ -585,10 +543,8 @@ if not model_only:
     LOGGER.info(f"Saving oskar sky model to {cfg.oskar_sky_model_file}")
     sky.save(str(cfg.oskar_sky_model_file))
 
-    with open(sinterferometer_ini, 'at') as f:
-        set_oskar_sim_interferometer(
-            f, 'sky/oskar_sky_model/file', cfg.oskar_sky_model_file
-        )
+    cfg.set_oskar_sim_interferometer('sky/oskar_sky_model/file',
+                                     cfg.oskar_sky_model_file)
 # ############################################################################ #
 # ########################  # # # # # # # # # # # # # # # #################### #
 # ########################## Synthetic observing run ######################### #
@@ -598,8 +554,8 @@ if not model_only:
 # ############# hold 'tabulated', Gaussian foreground sources ################ #
 # ############################################################################ #
     LOGGER.info("Running synthetic observations")
-    for icut, (t_scan_start, t_scan_end) in enumerate(scan_times):
-        t_scan = (t_scan_end - t_scan_start).to_value('s')
+    for icut, (t_start, t_end) in enumerate(scan_times):
+        duration = (t_end - t_start).to_value('s')
 
         # TODO:
         #  Below code block into create_beam_pattern_image method
@@ -608,17 +564,16 @@ if not model_only:
         sbeam_name = sbeam_root.append(sbeam_sfx)
         sbeam_fname = sbeam_name.append('.fits')
 
-        # Set up beam-pattern for scan
-        LOGGER.info(f"Running oskar_sim_beam_pattern from {sbeam_ini}")
-        with open(sbeam_ini, 'at') as f:
-            set_oskar_sim_beam_pattern(
-                f, "beam_pattern/root_path", sbeam_root
-            )
-            set_oskar_sim_beam_pattern(f, "observation/start_time_utc",
-                                       t_scan_start)
-            set_oskar_sim_beam_pattern(f, "observation/length", t_scan)
-        run_oskar_sim_beam_pattern(sbeam_ini)
-        sbeam_hdu = fits.open(sbeam_fname)  #
+        # Adjust oskar's sim_beam_pattern settings in .ini file
+        cfg.set_oskar_sim_beam_pattern("beam_pattern/root_path", sbeam_root)
+        cfg.set_oskar_sim_beam_pattern("observation/start_time_utc", t_start)
+        cfg.set_oskar_sim_beam_pattern("observation/length", duration)
+
+        # Create beam pattern as .fits cube using oskar's sim_beam_pattern task
+        LOGGER.info(f"Running oskar_sim_beam_pattern from {cfg.sbeam_ini}")
+        run_oskar_sim_beam_pattern(cfg.sbeam_ini)
+
+        sbeam_hdu = fits.open(sbeam_fname)
 
         LOGGER.info(f"Starting synthetic observations' scan #{icut + 1}")
         # TODO: End of 27APR22. Figure out sbmout etc below. I think we don't
@@ -686,42 +641,51 @@ if not model_only:
                      out=ionom_cut)
         miriad.fits(op="xyout", _in=ionom_cut, out=iono_cut)
 
-        # Create measurement sets
-        with open(sinterferometer_ini, 'at') as f:
-            set_oskar_sim_interferometer(
-                f, 'observation/start_time_utc',
-                t_scan_start.strftime("%Y/%m/%d/%H:%M:%S.%f")[:-2]
-            )
-            set_oskar_sim_interferometer(
-                f, 'telescope/external_tec_screen/input_fits_file', iono_cut
-            )
-            set_oskar_sim_interferometer(
-                f, 'interferometer/ms_filename', cmpt_mscut
-            )
+        # Adjust oskar's sim_interferometer settings in .ini file
+        cfg.set_oskar_sim_interferometer(
+            'sky/oskar_sky_model/file', cfg.oskar_sky_model_file
+        )
 
-            set_oskar_sim_interferometer(
-                f, 'observation/length', format(t_scan, '.1f')
-            )
-            set_oskar_sim_interferometer(
-                f, 'observation/num_time_steps',
-                int(t_scan // cfg.correlator.t_int)
-            )
-        run_oskar_sim_interferometer(sinterferometer_ini)
+        cfg.set_oskar_sim_interferometer(
+            'observation/start_time_utc',
+            t_start.strftime("%Y/%m/%d/%H:%M:%S.%f")[:-2]
+        )
 
-        script_line0 = f'vishead(vis="{cmpt_mscut}", mode="put", hdkey="telescope", hdvalue="SKA1-LOW")\n'
-        script_line1 = f'exportuvfits(vis="{cmpt_mscut}", fitsfile="{cmpt_uvfcut}", datacolumn="data", multisource=False, writestation=False, overwrite=True)\n'
-        with open('_casa_script.py', 'w') as f:
-            f.write(script_line0)
-            f.write(script_line1)
+        cfg.set_oskar_sim_interferometer(
+            'telescope/external_tec_screen/input_fits_file', iono_cut
+         )
 
-        text = f"{farm.software.which('casa')} --nologger -c _casa_script.py"
-        subprocess.run(text, shell=True)
+        cfg.set_oskar_sim_interferometer(
+            'interferometer/ms_filename', cmpt_mscut
+        )
 
-        # TODO: Script fails here because of the modifications to miriad input
-        #  args/kwargs made today. Need another way around the miriad character
-        #  limit that doesn't include recompiling miriad! Perhaps all miriad
-        #  tasks executed should also execute with chdir commands and just filename
-        #  inputs?
+        cfg.set_oskar_sim_interferometer(
+            'observation/length', format(duration, '.1f')
+        )
+
+        cfg.set_oskar_sim_interferometer(
+            'observation/num_time_steps', int(duration // cfg.correlator.t_int)
+        )
+
+        # Run oskar's sim_interferometer task and produce measurement set
+        run_oskar_sim_interferometer(cfg.sinterferometer_ini)
+
+        # Add SKA1-LOW to measurement set header and export measurement set to
+        # uvfits format via casa
+        casa_script = casa.CasaScript(filename='_casa_script.py',
+                                      logfile=logfile)
+
+        casa_script.add_task(casa.tasks.vishead(
+            vis="{cmpt_mscut}", mode="put",
+            hdkey="telescope", hdvalue="SKA1-LOW")
+        )
+        casa_script.add_task(casa.tasks.exportuvfits(
+            vis=f"{cmpt_mscut}", fitsfile=f"{cmpt_uvfcut}", datacolumn="data",
+            multisource=False, writestation=False, overwrite=True)
+        )
+        casa_script.execute()
+
+        # Implement gain errors via miriad
         miriad.fits(op='uvin', _in=cmpt_uvfcut, options="nofq", out=cmpt_uvcut)
         miriad.uvmodel(vis=cmpt_uvcut, model=gsm_cut, options="add,zero",
                        out=out_uvcut)
@@ -730,12 +694,14 @@ if not model_only:
                        gnoise=cfg.calibration.gains.amp_err)
         miriad.fits(op='uvout', _in=out_uvcut, out=out_uvfcut)
 
-        script_line0 = f'importuvfits(vis="{out_mscut}", fitsfile="{out_uvfcut}")\n'
-        with open('_casa_script.py', 'w') as f:
-            f.write(script_line0)
+        # Import uvfits visbility dataset as measurement set via casa
+        casa_script = casa.CasaScript(filename='_casa_script.py',
+                                      logfile=logfile)
+        casa_script.add_task(casa.tasks.importuvfits(
+            vis=f"{out_mscut}", fitsfile="f{out_uvfcut}")
+        )
+        casa_script.execute()
 
-        text = f"{farm.software.which('casa')} --nologger -c _casa_script.py"
-        subprocess.run(text, shell=True)
 
 # ############################################################################ #
 # p_k_field, bins_field = pbox.get_power(imdata_gssm[0], (0.002, 0.002,))
