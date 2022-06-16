@@ -6,7 +6,7 @@ except ModuleNotFoundError:
     import os
     import subprocess
     import pathlib
-    from typing import Union
+    from typing import Union, Optional
 
 
     from farm.software.common import which
@@ -42,7 +42,8 @@ except ModuleNotFoundError:
 
     class CasaScript:
         def __init__(self, filename: Union[pathlib.Path, str],
-                     logfile: Union[pathlib.Path, str]):
+                     logfile: Optional[Union[pathlib.Path, str]] = None):
+
             if isinstance(filename, str):
                 filename = pathlib.Path(filename)
             self.file = filename
@@ -50,7 +51,9 @@ except ModuleNotFoundError:
             self.file.touch()
 
             if isinstance(logfile, str):
-                self.logfile = pathlib.Path(logfile)
+                logfile = pathlib.Path(logfile)
+
+            self.logfile = logfile
 
         def add_task(self, line):
             with open(self.file, 'at') as f:

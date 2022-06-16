@@ -71,7 +71,7 @@ def create_tec_screens(farm_cfg: loader.FarmConfiguration,
     if logger:
         logger.info(
             f"TEC screens saved to "
-            f"{','.join([_.name for _ in farm_cfg.calibration.tec.image])}"
+            f"{','.join([_.name for _ in created_tec_fitsfiles])}"
         )
 
     return created_tec_fitsfiles
