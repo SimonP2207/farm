@@ -676,8 +676,8 @@ if not model_only:
                                       logfile=logfile)
 
         casa_script.add_task(casa.tasks.vishead(
-            vis="{cmpt_mscut}", mode="put",
-            hdkey="telescope", hdvalue="SKA1-LOW")
+            vis=f"{cmpt_mscut}", mode="put", hdkey="telescope",
+            hdvalue="SKA1-LOW")
         )
         casa_script.add_task(casa.tasks.exportuvfits(
             vis=f"{cmpt_mscut}", fitsfile=f"{cmpt_uvfcut}", datacolumn="data",
@@ -698,7 +698,7 @@ if not model_only:
         casa_script = casa.CasaScript(filename='_casa_script.py',
                                       logfile=logfile)
         casa_script.add_task(casa.tasks.importuvfits(
-            vis=f"{out_mscut}", fitsfile="f{out_uvfcut}")
+            vis=f"{out_mscut}", fitsfile=f"{out_uvfcut}")
         )
         casa_script.execute()
 
