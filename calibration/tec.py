@@ -1,8 +1,12 @@
 import pathlib
-from typing import Union
+import logging
+from typing import Union, Optional, List, Tuple
 import numpy as np
 from astropy.io import fits
+from astropy.time import Time
 from ARatmospy.ArScreens import ArScreens
+
+from ..data.loader import FarmConfiguration
 
 
 def create_tec_screen(fitsfile: pathlib.Path, freq: float, fov: float,
@@ -94,6 +98,58 @@ def create_tec_screen(fitsfile: pathlib.Path, freq: float, fov: float,
             for i, screen in enumerate(tec_screen.screens[layer]):
                 hdul[0].data[:, i, ...] += phase2tec * screen[np.newaxis, ...]
 
+
+def create_tec_screens(farm_cfg: FarmConfiguration,
+                       scans: Tuple[Tuple[Time, Time], ...],
+                       tec_prefix: str,
+                       logger: Optional[logging.Logger] = None
+                       ) -> List[pathlib.Path]:
+    """
+    Calculates and plots scan times for a farm configuration. Also optionally
+    logs results/operations
+
+    Parameters
+    ----------
+    farm_cfg
+        FarmConfiguration instance to parse information from
+    scan_times
+        Tuple of (start, end)
+    tec_prefix
+        Prefix to append to ionospheric TEC .fits files
+    logger
+        logging.Logger instance to log messages to
+
+    Returns
+    -------
+    None
+    """
+    from tqdm import tqdm
+
+    if logger:
+        logger.info(
+            f"Creating TEC screens from scratch for {len(scans)} scans"
+        )
+
+    tec_root = farm_cfg.output_dcy / tec_prefix
+    created_tec_fitsfiles = []
+    for i, (t_start, t_end) in tqdm(enumerate(scans), desc='Creating TEC'):
+        duration = (t_end - t_start).to_value('s')
+        tec_fitsfile = tec_root.append(
+            str(i).zfill(len(str(len(scans)))) + '.fits'
+        )
+        create_tec_screen(
+            tec_fitsfile, np.mean(farm_cfg.correlator.frequencies), 20., 20e3,
+            farm_cfg.correlator.t_int, duration, farm_cfg.calibration.noise.seed
+        )
+        created_tec_fitsfiles.append(tec_fitsfile)
+
+    if logger:
+        logger.info(
+            f"TEC screens saved to "
+            f"{','.join([_.name for _ in created_tec_fitsfiles])}"
+        )
+
+    return created_tec_fitsfiles
 
 
 if __name__ == '__main__':

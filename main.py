@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import shutil
 import subprocess
@@ -28,53 +29,32 @@ from farm.software.oskar import (run_oskar_sim_beam_pattern,
 from farm import LOGGER
 
 
-def create_tec_screens(farm_cfg: loader.FarmConfiguration,
-                       tec_prefix: str,
-                       logger: Optional[logging.Logger] = None
-                       ) -> List[pathlib.Path]:
+def determine_visfile_type(visfile: Union[str, pathlib.Path]) -> str:
     """
-    Calculates and plots scan times for a farm configuration. Also optionally
-    logs results/operations
-
-    Parameters
-    ----------
-    farm_cfg
-        FarmConfiguration instance to parse information from
-    tec_prefix
-        Prefix to append to ionospheric TEC .fits files
-    logger
-        logging.Logger instance to log messages to
-
-    Returns
-    -------
-    None
+    Determine the type of visbility data file. One of either
+    'uvfits', 'miriad', or 'ms' for uvfits format, miriad visibility
+    format, or measurement set, respectively
     """
-    if logger:
-        logger.info(
-            f"Creating TEC screens from scratch for {len(scan_times)} scans"
-        )
+    if isinstance(visfile, str):
+        visfile = pathlib.Path(visfile)
 
-    tec_root = farm_cfg.output_dcy / tec_prefix
-    created_tec_fitsfiles = []
-    for i, (t_start, t_end) in tqdm(enumerate(scan_times),
-                                              desc='Creating TEC'):
-        duration = (t_end - t_start).to_value('s')
-        tec_fitsfile = tec_root.append(
-            str(i).zfill(len(str(len(scan_times)))) + '.fits'
-        )
-        farm.calibration.tec.create_tec_screen(
-            tec_fitsfile, np.mean(farm_cfg.correlator.frequencies), 20., 20e3,
-            farm_cfg.correlator.t_int, duration, farm_cfg.calibration.noise.seed
-        )
-        created_tec_fitsfiles.append(tec_fitsfile)
+    try:
+        fits.open(visfile)
+        return 'uvfits'
+    except IsADirectoryError:
+        pass
+    except OSError:
+        return ''
 
-    if logger:
-        logger.info(
-            f"TEC screens saved to "
-            f"{','.join([_.name for _ in created_tec_fitsfiles])}"
-        )
+    visfile_contents = os.listdir(visfile)
 
-    return created_tec_fitsfiles
+    if 'visdata' in visfile_contents:
+        return 'miriad'
+
+    if 'ANTENNA' in visfile_contents:
+        return 'ms'
+
+    return ''
 
 
 # TODO: Write check_tec_image_compatibility method
@@ -221,7 +201,8 @@ if not model_only:
 if cfg.calibration.tec and not model_only:
     if cfg.calibration.tec.create:
         cfg.calibration.tec.image.append(
-            create_tec_screens(cfg, tec_prefix='iono_tec', logger=LOGGER)
+            farm.calibration.tec.create_tec_screens(
+                cfg, scan_times, tec_prefix='iono_tec', logger=LOGGER)
         )
     else:
         tec_compatible = check_tec_image_compatibility(
@@ -631,6 +612,7 @@ if not model_only:
 
         text = f'/bin/cp -r {gsm_pcut} {gsm_tcut}'
         subprocess.run(text, shell=True)
+
         miriad.puthd(_in=f"{gsm_tcut}/cellscal", value="1/F")
         miriad.regrid(_in=gsm_pcut, tin=gsm_tcut, out=gsm_cut)
 
@@ -672,35 +654,23 @@ if not model_only:
 
         # Add SKA1-LOW to measurement set header and export measurement set to
         # uvfits format via casa
-        casa_script = casa.CasaScript(filename='_casa_script.py',
-                                      logfile=logfile)
+        casa.tasks.vishead(vis=f"{cmpt_mscut}", mode="put", hdkey="telescope",
+                           hdvalue="SKA1-LOW")
+        casa.tasks.exportuvfits(vis=f"{cmpt_mscut}", fitsfile=f"{cmpt_uvfcut}",
+                                datacolumn="data", multisource=False,
+                                writestation=False, overwrite=True)
 
-        casa_script.add_task(casa.tasks.vishead(
-            vis=f"{cmpt_mscut}", mode="put", hdkey="telescope",
-            hdvalue="SKA1-LOW")
-        )
-        casa_script.add_task(casa.tasks.exportuvfits(
-            vis=f"{cmpt_mscut}", fitsfile=f"{cmpt_uvfcut}", datacolumn="data",
-            multisource=False, writestation=False, overwrite=True)
-        )
-        casa_script.execute()
-
-        # Implement gain errors via miriad
         miriad.fits(op='uvin', _in=cmpt_uvfcut, options="nofq", out=cmpt_uvcut)
         miriad.uvmodel(vis=cmpt_uvcut, model=gsm_cut, options="add,zero",
                        out=out_uvcut)
-        miriad.gperror(vis=out_uvcut, interval=1.,
+
+        miriad.gperror(inp_vis=out_uvcut, interval=1.,
                        pnoise=cfg.calibration.gains.phase_err,
                        gnoise=cfg.calibration.gains.amp_err)
+
         miriad.fits(op='uvout', _in=out_uvcut, out=out_uvfcut)
 
-        # Import uvfits visbility dataset as measurement set via casa
-        casa_script = casa.CasaScript(filename='_casa_script.py',
-                                      logfile=logfile)
-        casa_script.add_task(casa.tasks.importuvfits(
-            vis=f"{out_mscut}", fitsfile=f"{out_uvfcut}")
-        )
-        casa_script.execute()
+        casa.tasks.importuvfits(vis=f"{out_mscut}", fitsfile=f"{out_uvfcut}")
 
 
 # ############################################################################ #

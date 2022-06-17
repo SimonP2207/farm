@@ -8,7 +8,7 @@ except ModuleNotFoundError:
     import pathlib
     from typing import Union, Optional
 
-
+    from farm import LOGGER
     from farm.software.common import which
 
     _CASA_PATH = which('casa')
@@ -26,7 +26,19 @@ except ModuleNotFoundError:
 
     class _CasaTask:
         def __init__(self, name: str):
+            from pathlib import Path
+            from logging import FileHandler
+
             self.name = name
+
+            # Find FARM log file if it exists
+            self.logfile = None
+            handlers = LOGGER.handlers
+            is_file_handler = [isinstance(_, FileHandler) for _ in handlers]
+
+            if any(is_file_handler):
+                file_handler = handlers[is_file_handler.index(True)]
+                self.logfile = Path(file_handler.baseFilename)
 
         @property
         def _command(self):
@@ -36,8 +48,17 @@ except ModuleNotFoundError:
                    ')'
 
         def __call__(self, **kwargs):
+
             self.kwargs = kwargs
-            return self._command
+
+            cmd = (f"{_CASA_PATH} --nogui --norc --agg --notelemetry "
+                   f"--nocrashreport --nologger --log2term")
+
+            if self.logfile:
+                cmd += f" --logfile {self.logfile} "
+
+            cmd += f" -c {self._command}"
+            subprocess.run(cmd, shell=True)
 
 
     class CasaScript:
@@ -60,6 +81,9 @@ except ModuleNotFoundError:
                 f.write(f"\n{line}")
 
         def execute(self):
+
+
+
             cmd = (f"{_CASA_PATH} --nogui --norc --agg --notelemetry "
                    f"--nocrashreport --nologger --log2term "
                    f"--logfile {self.logfile} -c {self.file}")
