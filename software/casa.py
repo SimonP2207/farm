@@ -57,7 +57,7 @@ except ModuleNotFoundError:
             if self.logfile:
                 cmd += f" --logfile {self.logfile} "
 
-            cmd += f" -c {self._command}"
+            cmd += f' -c "{self._command}"'
             subprocess.run(cmd, shell=True)
 
 

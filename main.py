@@ -664,7 +664,7 @@ if not model_only:
         miriad.uvmodel(vis=cmpt_uvcut, model=gsm_cut, options="add,zero",
                        out=out_uvcut)
 
-        miriad.gperror(inp_vis=out_uvcut, interval=1.,
+        miriad.gperror(vis=out_uvcut, interval=1.,
                        pnoise=cfg.calibration.gains.phase_err,
                        gnoise=cfg.calibration.gains.amp_err)
 
