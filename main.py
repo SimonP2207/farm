@@ -29,6 +29,44 @@ from farm.software.oskar import (run_oskar_sim_beam_pattern,
 from farm import LOGGER
 
 
+def create_beam_pattern_fits(cfg, scan_num, time, dt, beam_fits):
+    beam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
+    beam_root = cfg.root_name.append(f"_scan{scan_num}")
+    beam_name = beam_root.append(beam_sfx)
+    beam_fname = beam_name.append('.fits')
+
+    # Create beam pattern as .fits cube using oskar's sim_beam_pattern task
+    LOGGER.info(f"Running oskar_sim_beam_pattern from {cfg.sbeam_ini}")
+    cfg.set_oskar_sim_beam_pattern("beam_pattern/root_path", beam_root)
+    cfg.set_oskar_sim_beam_pattern("observation/start_time_utc", time)
+    cfg.set_oskar_sim_beam_pattern("observation/length", dt)
+    run_oskar_sim_beam_pattern(cfg.sbeam_ini)
+
+    beam_hdu = fits.open(beam_fname)
+
+    LOGGER.info(f"Starting synthetic observations' scan #{scan_num}")
+    # TODO: End of 27APR22. Figure out sbmout etc below. I think we don't
+    #  need a lot of the files as each scan's beam has only one 'frame' in
+    #  time in the beam cube
+    bmout_hdu = fits.PrimaryHDU(beam_hdu[0].data[0, :, :, :])
+    bmout_hdu.header.set('CTYPE1', 'RA---SIN')
+    bmout_hdu.header.set('CTYPE2', 'DEC--SIN')
+    bmout_hdu.header.set('CTYPE3', 'FREQ    ')
+    bmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
+    bmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
+    bmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
+    bmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
+    bmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
+    bmout_hdu.header.set('CRPIX3', 1)
+    bmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
+    bmout_hdu.header.set('CDELT2', cfg.field.cdelt)
+    bmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
+    bmout_hdu.header.set('CUNIT1', 'deg     ')
+    bmout_hdu.header.set('CUNIT2', 'deg     ')
+    bmout_hdu.header.set('CUNIT3', 'Hz      ')
+    bmout_hdu.writeto(beam_fits, overwrite=True)
+
+
 def determine_visfile_type(visfile: Union[str, pathlib.Path]) -> str:
     """
     Determine the type of visbility data file. One of either
@@ -535,53 +573,60 @@ if not model_only:
 # ############# hold 'tabulated', Gaussian foreground sources ################ #
 # ############################################################################ #
     LOGGER.info("Running synthetic observations")
+
+    from dataclasses import dataclass, field
+    from collections.abc import Iterable
+
+    @dataclass(frozen=True)
+    class Scan:
+        """Class for an observational scan"""
+        start_time: Time
+        end_time: Time
+        duration: float = field(init=False)
+
+        def __post_init__(self):
+            object.__setattr__(self, 'duration',
+                               (self.end_time - self.start_time).to_value('s'))
+
+
+    class Observation:
+        """Class for an entire observational run incorporating multiple scans"""
+        def __init__(self):
+            self._scans = []
+
+        @property
+        def scans(self) -> List[Scan]:
+            """List of scans in observation"""
+            return self._scans
+
+        def add_scan(self, new_scans):
+            """Add a scan"""
+            if isinstance(new_scans, Iterable):
+                for scan in new_scans:
+                    self.add_scan(scan)
+            else:
+                if not isinstance(new_scans, Scan):
+                    errh.raise_error(TypeError,
+                                     "Can only add Scan instances to "
+                                     "Observation instance, not "
+                                     f"{type(new_scans)} instance")
+                self._scans.append(new_scans)
+
+        @property
+        def total_time(self) -> float:
+            """Total time on source, over the course of the observation [s]"""
+            return sum([scan.duration for scan in self.scans])
+
+
+    measurement_sets = []
     for icut, (t_start, t_end) in enumerate(scan_times):
         duration = (t_end - t_start).to_value('s')
 
-        # TODO:
-        #  Below code block into create_beam_pattern_image method
-        sbeam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
-        sbeam_root = cfg.root_name.append(f"_scan{icut}")
-        sbeam_name = sbeam_root.append(sbeam_sfx)
-        sbeam_fname = sbeam_name.append('.fits')
-
-        # Adjust oskar's sim_beam_pattern settings in .ini file
-        cfg.set_oskar_sim_beam_pattern("beam_pattern/root_path", sbeam_root)
-        cfg.set_oskar_sim_beam_pattern("observation/start_time_utc", t_start)
-        cfg.set_oskar_sim_beam_pattern("observation/length", duration)
-
-        # Create beam pattern as .fits cube using oskar's sim_beam_pattern task
-        LOGGER.info(f"Running oskar_sim_beam_pattern from {cfg.sbeam_ini}")
-        run_oskar_sim_beam_pattern(cfg.sbeam_ini)
-
-        sbeam_hdu = fits.open(sbeam_fname)
-
-        LOGGER.info(f"Starting synthetic observations' scan #{icut + 1}")
-        # TODO: End of 27APR22. Figure out sbmout etc below. I think we don't
-        #  need a lot of the files as each scan's beam has only one 'frame' in
-        #  time in the beam cube
-        sicut = str(icut).zfill(len(str(cfg.observation.n_scan)) + 1)
-        sbmdata_out = sbeam_hdu[0].data[0, :, :, :]
-        sbmout_hdu = fits.PrimaryHDU(sbmdata_out)
-        sbmout_cut = cfg.root_name.append('_ICUT_' + sicut)
-        sbmout_fcut = cfg.root_name.append('_ICUT_' + sicut + '.fits')
-
-        sbmout_hdu.header.set('CTYPE1', 'RA---SIN')
-        sbmout_hdu.header.set('CTYPE2', 'DEC--SIN')
-        sbmout_hdu.header.set('CTYPE3', 'FREQ    ')
-        sbmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
-        sbmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
-        sbmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
-        sbmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
-        sbmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
-        sbmout_hdu.header.set('CRPIX3', 1)
-        sbmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
-        sbmout_hdu.header.set('CDELT2', cfg.field.cdelt)
-        sbmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
-        sbmout_hdu.header.set('CUNIT1', 'deg     ')
-        sbmout_hdu.header.set('CUNIT2', 'deg     ')
-        sbmout_hdu.header.set('CUNIT3', 'Hz      ')
-        sbmout_hdu.writeto(sbmout_fcut, overwrite=True)
+        # Simulate the primary beam for this scan
+        sicut = format(icut, f'0{len(str(cfg.observation.n_scan)) + 1}')
+        scan_beam_fits = cfg.root_name.append('_ICUT_{sicut}.fits')
+        create_beam_pattern_fits(cfg, icut, t_start, duration, scan_beam_fits)
+        scan_beam_mirim = scan_beam_fits.with_suffix('.im')
 
         # TODO: This is where we left off. Correct below to be farm-compatible
         #  code
@@ -604,15 +649,21 @@ if not model_only:
         out_mscut = cfg.root_name.append('_ICUT_' + sicut + 'out.ms')
         out_uvfcut = cfg.root_name.append('_ICUT_' + sicut + 'out.uvf')
 
-        LOGGER.info(f"Multiplying sky model by beam response, {sbmout_cut}")
-        if sbmout_cut.exists():
-            shutil.rmtree(sbmout_cut)
-        miriad.fits(op="xyin", _in=sbmout_fcut, out=sbmout_cut)
-        miriad.maths(exp=f"<{sbmout_cut}>*<{sky_model_mir_im}>", out=gsm_pcut)
+        LOGGER.info(f"Multiplying sky model by beam response, {scan_beam_fits}")
+        miriad.fits(op="xyin", _in=scan_beam_fits, out=scan_beam_mirim)
+        expr = f"<{scan_beam_mirim}>*<{sky_model_mir_im}>"
+        miriad.maths(exp=expr, out=gsm_pcut)
 
         text = f'/bin/cp -r {gsm_pcut} {gsm_tcut}'
         subprocess.run(text, shell=True)
 
+        # For the image based model cube, it is first necessary to regrid in a
+        # way that will allow a single (u,v) grid to represent the data within
+        # miriad uvmodel. This is done by taking the lowest frequency as a
+        # reference and then scaling the cell size up for higher frequencies.
+        # Since the model needs to be in Jy/pixel, it is necessary to reduce the
+        # brightness as 1/f**2 to take account of the larger pixel size at
+        # higher frequencies.
         miriad.puthd(_in=f"{gsm_tcut}/cellscal", value="1/F")
         miriad.regrid(_in=gsm_pcut, tin=gsm_tcut, out=gsm_cut)
 
@@ -663,7 +714,8 @@ if not model_only:
         miriad.fits(op='uvin', _in=cmpt_uvfcut, options="nofq", out=cmpt_uvcut)
         miriad.uvmodel(vis=cmpt_uvcut, model=gsm_cut, options="add,zero",
                        out=out_uvcut)
-
+        # TODO: Move gperror to python functionality? Initialise gain tables
+        #  with gperror, then manipulate that table with python
         miriad.gperror(vis=out_uvcut, interval=1.,
                        pnoise=cfg.calibration.gains.phase_err,
                        gnoise=cfg.calibration.gains.amp_err)
@@ -671,7 +723,44 @@ if not model_only:
         miriad.fits(op='uvout', _in=out_uvcut, out=out_uvfcut)
 
         casa.tasks.importuvfits(vis=f"{out_mscut}", fitsfile=f"{out_uvfcut}")
+        measurement_sets.append(out_mscut)
 
+    # Concatenate all measurement sets produced in the above for-loop using casa
+    # so that a single final visibility dataset is produced for the challenge
+    casa.tasks.concat(vis=str(measurement_sets),
+                      concatvis=f"{cfg.root_name}.ms",
+                      timesort=True)
+
+    gaussian_taper_arcsec = 60.  # in arcsec
+    niter = 10000
+
+    wsclean_args ={
+        'weight': 'uniform',
+        'taper-gaussian': f'{gaussian_taper_arcsec}asec',
+        'super-weight': 4,
+        'name': f'{cfg.root_name}_wsclean',
+        'size': f'{cfg.field.nx} {cfg.field.ny}',
+        'scale': f'{cfg.field.cdelt * 3600}asec',
+        'channels-out': cfg.correlator.n_chan,
+        'niter': niter,
+        'pol': 'xx'
+    }
+    farm.software.wsclean(f"{cfg.root_name}.ms", wsclean_args,
+                          consolidate_channels=True)
+
+# TODO: GLEAM/LOBES (has spix and deconvolved sizes which OSKAR can make use of)
+
+# Ionospheric simulation altered to 4 hour total, sliced into relevant parts to
+# correspond with scans
+
+# TODO: Explore oskar options for parallelisation and GPU use?
+
+# TODO: Sanity checks need implementing at each stage
+
+# TODO: All-sky view of strong sources
+
+
+# TODO: Remove any intermediate data-products
 
 # ############################################################################ #
 # p_k_field, bins_field = pbox.get_power(imdata_gssm[0], (0.002, 0.002,))
