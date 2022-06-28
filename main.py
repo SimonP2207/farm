@@ -727,7 +727,7 @@ if not model_only:
 
     # Concatenate all measurement sets produced in the above for-loop using casa
     # so that a single final visibility dataset is produced for the challenge
-    casa.tasks.concat(vis=str(measurement_sets),
+    casa.tasks.concat(vis=[str(ms) for ms in measurement_sets],
                       concatvis=f"{cfg.root_name}.ms",
                       timesort=True)
 

@@ -48,7 +48,6 @@ except ModuleNotFoundError:
                    ')'
 
         def __call__(self, **kwargs):
-
             self.kwargs = kwargs
 
             cmd = (f"{_CASA_PATH} --nogui --norc --agg --notelemetry "
@@ -58,6 +57,7 @@ except ModuleNotFoundError:
                 cmd += f" --logfile {self.logfile} "
 
             cmd += f' -c "{self._command}"'
+            LOGGER.info(msg=cmd)
             subprocess.run(cmd, shell=True)
 
 
@@ -81,12 +81,10 @@ except ModuleNotFoundError:
                 f.write(f"\n{line}")
 
         def execute(self):
-
-
-
             cmd = (f"{_CASA_PATH} --nogui --norc --agg --notelemetry "
                    f"--nocrashreport --nologger --log2term "
                    f"--logfile {self.logfile} -c {self.file}")
+            LOGGER.info(msg=cmd)
             subprocess.run(cmd, shell=True)
 
     tools = _Namespace()

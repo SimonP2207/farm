@@ -1,4 +1,5 @@
 import copy
+import logging
 import subprocess
 import pathlib
 from typing import Union, List, Dict, Tuple
@@ -210,6 +211,8 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
     ValueError
         If an empty dictionary is passed as kw_args
     """
+    from .. import LOGGER
+
     if not kw_args:
         errh.raise_error(ValueError, "kw_args can not be empty")
 
@@ -257,6 +260,7 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
     for wsclean_product in wsclean_products:
         wsclean_product.unlink()
 
+    LOGGER.info(msg=cmd)
     if not dryrun:
         subprocess.run(cmd, shell='True')
 
