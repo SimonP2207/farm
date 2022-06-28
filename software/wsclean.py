@@ -270,7 +270,10 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
     for wsclean_product in output_dcy.glob(f'./{output_prefix}*.fits'):
         for k in products:
             if k in wsclean_product.name:
-                products[k].append(wsclean_product)
+                # Exclude MFS images as they add an unwanted channel into the
+                # consolidated image cube later
+                if 'MFS' not in wsclean_product.name:
+                    products[k].append(wsclean_product)
     products = {k: sorted(v) for k, v in products.items()}
 
     if all([len(value) in (0, 1) for value in products.values()]):
@@ -285,13 +288,17 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
         return cmd, products
 
     if consolidate_channels:
+        with fits.open(products['image'][0]) as hdul:
+            im_hdr = hdul[0].header
+
+        # Remove all traces of Stokes axis in .fits
+        for kw in ('CRPIX4', 'CDELT4', 'CUNIT4', 'CRVAL4'):
+            im_hdr.remove(kw, ignore_missing=True, remove_all=True)
+
         for im_type in products:
             rename = pathlib.Path(
                 output_dcy / f'{output_prefix}-{im_type}.fits'
             )
-            with fits.open(products['image'][0]) as hdul:
-                im_hdr = hdul[0].header
-
             im_data = np.zeros((len(products[im_type]),
                                 im_hdr['NAXIS2'],
                                 im_hdr['NAXIS1']), dtype=np.float32)
