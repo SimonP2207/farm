@@ -5,9 +5,10 @@ other farm subpackages, or not suited to placement in farm's main directory
 from typing import Union
 import numpy as np
 import numpy.typing as npt
+from . import decorators, error_handling, fits, image_functions, plotting, file_handling
 
 __all__ = ['decorators', 'error_handling', 'fits', 'image_functions',
-           'plotting']
+           'plotting', 'file_handling']
 
 
 def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:

@@ -28,7 +28,8 @@ FILES = {
     },
     'TABLES': {
         'ATEAM': 'ateam.data',
-        'GLEAM': 'GLEAM_EGC_v2_compact.fits'
+        'GLEAM': 'GLEAM_catalogue.fits',
+        'LOBES': 'GLM_LoBESv2.osm',
     },
 }
 

@@ -6,8 +6,6 @@ from astropy.io import fits
 from astropy.time import Time
 from ARatmospy.ArScreens import ArScreens
 
-from ..data.loader import FarmConfiguration
-
 
 def create_tec_screen(fitsfile: pathlib.Path, freq: float, fov: float,
                       bmax: float, t_int: int, duration: int,
@@ -99,7 +97,7 @@ def create_tec_screen(fitsfile: pathlib.Path, freq: float, fov: float,
                 hdul[0].data[:, i, ...] += phase2tec * screen[np.newaxis, ...]
 
 
-def create_tec_screens(farm_cfg: FarmConfiguration,
+def create_tec_screens(farm_cfg: 'FarmConfiguration',
                        scans: Tuple[Tuple[Time, Time], ...],
                        tec_prefix: str,
                        logger: Optional[logging.Logger] = None

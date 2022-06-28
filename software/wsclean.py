@@ -1,7 +1,7 @@
 import copy
 import subprocess
 import pathlib
-from typing import Union, List, Dict
+from typing import Union, List, Dict, Tuple
 from enum import Enum
 import numpy as np
 from astropy.io import fits
@@ -169,7 +169,8 @@ _WSCLEAN_DEFAULT_ARGS = {
 def wsclean(ms_list: Union[Union[str, pathlib.Path],
                            List[Union[str, pathlib.Path]]],
             kw_args: Dict,
-            consolidate_channels: bool = True):
+            consolidate_channels: bool = True,
+            dryrun: bool = False) -> Tuple[str, Dict]:
     """
     Executes wsclean on measurement set(s) according to specified kwargs
 
@@ -192,6 +193,14 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
         If 'channels-out' is specified in kw_args and its value is > 1, wsclean
         outputs separate .fits images for each channel. In the case you want a
         single .fits image cube, set this to True (default)
+    dryrun
+        Whether to return the command-line command for wsclean without running
+        wsclean. Default is False. Mainly for testing purposes
+
+    Return
+    ------
+    Tuple of command-line command for running wsclean and products as the
+    2-tuple (str, dict)
 
     Raises
     ------
@@ -214,6 +223,8 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
         if isinstance(_WSCLEAN_DEFAULT_ARGS[k], Option):
             if _WSCLEAN_DEFAULT_ARGS[k].value != v:
                 input_args[k] = Option.INCLUDE if v else Option.EXCLUDE
+            else:
+                input_args.pop(k)
         elif v != _WSCLEAN_DEFAULT_ARGS[k]:
             input_args[k] = v
         else:
@@ -246,7 +257,8 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
     for wsclean_product in wsclean_products:
         wsclean_product.unlink()
 
-    subprocess.run(cmd, shell='True')
+    if not dryrun:
+        subprocess.run(cmd, shell='True')
 
     products = {
         'dirty': [], 'image': [], 'model': [], 'psf': [], 'residual': []
@@ -257,35 +269,40 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
                 products[k].append(wsclean_product)
     products = {k: sorted(v) for k, v in products.items()}
 
-    if all([len(value) == 1 for value in products.values()]):
-        return {k: v[0] for k, v in products.items()}
+    if all([len(value) in (0, 1) for value in products.values()]):
+        for im_type in products:
+            rename = pathlib.Path(
+                output_dcy / f'{output_prefix}-{im_type}.fits'
+            )
+            if len(products[im_type]) > 0:
+                products[im_type][0].rename(rename)
+                products[im_type][0] = rename
+
+        return cmd, products
 
     if consolidate_channels:
         for im_type in products:
             rename = pathlib.Path(
                 output_dcy / f'{output_prefix}-{im_type}.fits'
             )
-            if len(products[im_type]) == 1:
-                products[im_type][0] = rename
-            else:
-                with fits.open(products['image'][0]) as hdul:
-                    im_hdr = hdul[0].header
+            with fits.open(products['image'][0]) as hdul:
+                im_hdr = hdul[0].header
 
-                im_data = np.zeros((len(products[im_type]),
-                                    im_hdr['NAXIS2'],
-                                    im_hdr['NAXIS1']), dtype=np.float32)
+            im_data = np.zeros((len(products[im_type]),
+                                im_hdr['NAXIS2'],
+                                im_hdr['NAXIS1']), dtype=np.float32)
 
-                for ichan, image in enumerate(products[im_type]):
-                    with fits.open(image) as hdul:
-                        im_data[ichan, :, :] = hdul[0].data[:, :]
+            for ichan, image in enumerate(products[im_type]):
+                with fits.open(image) as hdul:
+                    im_data[ichan, :, :] = hdul[0].data[:, :]
 
-                hdu_cube = fits.PrimaryHDU(im_data)
-                hdu_cube.header = im_hdr
-                hdu_cube.writeto(rename)
+            hdu_cube = fits.PrimaryHDU(im_data)
+            hdu_cube.header = im_hdr
+            hdu_cube.writeto(rename)
 
-                for im in products[im_type]:
-                    im.unlink()
+            for im in products[im_type]:
+                im.unlink()
 
-                products[im_type] = rename
+            products[im_type] = rename
 
-    return products
+    return cmd, products

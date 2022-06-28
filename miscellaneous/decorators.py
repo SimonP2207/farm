@@ -7,8 +7,6 @@ import logging
 import warnings
 from typing import Callable, Any
 
-from .error_handling import issue_warning, raise_error
-
 
 def ensure_is_fits(*files):
     """Ensure the listed arguments are fits files"""
@@ -44,6 +42,8 @@ def log_errors_warnings(function):
     """
     Decorator for logging and raising errors/warnings issued during method calls
     """
+    from .error_handling import issue_warning, raise_error
+
     def wrapper(*args, **kwargs):
         """wrapper function"""
         try:

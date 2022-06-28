@@ -4,7 +4,7 @@ Methods/classes related to the command-line interface with OSKAR
 import io
 import subprocess
 import pathlib
-from typing import Union, TextIO
+from typing import Union, TextIO, Optional
 from functools import partial
 
 from astropy.time import Time
@@ -29,7 +29,8 @@ if sfuncs.which('oskar') is None:
 oskar_path = pathlib.Path(sfuncs.which('oskar'))
 
 
-def add_dataframe_to_sky(df: pd.DataFrame, sky: Sky, col_dict: dict):
+def add_dataframe_to_sky(df: pd.DataFrame, sky: Sky,
+                         col_dict: Optional[dict] = None):
     """
     Add all entrys in a pandas.DataFrame to an oskar.Sky instance
 
@@ -58,16 +59,24 @@ def add_dataframe_to_sky(df: pd.DataFrame, sky: Sky, col_dict: dict):
                 'pa': 'position angle column name'  # str or None
             }
 
+        In the case whereby col_dict is None (default), it is assumed that the
+        DataFrame has all 12 required oskar sky model columns, appropriately
+        named
+
     Returns
     -------
     None
     """
+    columns = ['ra', 'dec', 'fluxI', 'fluxQ', 'fluxU', 'fluxV',
+               'freq0', 'spix', 'rm', 'maj', 'min', 'pa']
 
-    df_to_oskar_dict = {}
-
-    for k, v in col_dict.items():
-        if v is not None:
-            df_to_oskar_dict[oskar_sky_model_cols[k]] = df[v]
+    if col_dict:
+        df_to_oskar_dict = {}
+        for k, v in col_dict.items():
+            if v is not None:
+                df_to_oskar_dict[oskar_sky_model_cols[k]] = df[v]
+    else:
+        df_to_oskar_dict = {c: c for c in columns}
 
     sky.append_sources(**df_to_oskar_dict)
 

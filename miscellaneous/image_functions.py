@@ -4,7 +4,7 @@ All methods/classes related to image handling
 from typing import Union, Tuple
 import numpy as np
 import numpy.typing as npt
-from ..sky_model import SkyClassType
+
 
 def calculate_spix(data_cube: npt.ArrayLike,
                    frequencies: npt.ArrayLike,

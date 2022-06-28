@@ -84,3 +84,10 @@
       include = true
       create = false
       image = "/Users/simon.purser/pylib/farm/data/files/sky_continuum_sdc3_v1_1.fits"  # fits image or table
+
+[wsclean]
+  taper-gaussian = 60  # arcsec
+  weight = 'uniform'
+  super-weight = 4
+  niter = 10000
+  pol = 'xx'

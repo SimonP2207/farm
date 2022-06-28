@@ -400,74 +400,68 @@ if cfg.sky_model.extragalactic.real_component.include:
         elif fits_eg_real.is_dir():
             errh.raise_error(FileNotFoundError, f"{fits_eg_real} is a dir")
 
+        data = None
+        LOGGER.info("Loading catalogue")
         if misc.fits.is_fits_table(fits_eg_real):
-            # TODO: Refactor all of the below code into sensible function(s)
             # Parse .fits table data
-            LOGGER.info("Loading GLEAM catalogue")
             data = misc.fits.fits_table_to_dataframe(fits_eg_real)
-
-            # Column name translation of GLEAM_EGC_v2.fits
-            sky_model_cols = {'ra': 'RAJ2000', 'dec': 'DEJ2000',
-                              'fluxI': 'int_flux_wide',
-                              'freq0': 'freq0', 'spix': 'alpha',
-                              'maj': 'a_wide', 'min': 'b_wide',
-                              'pa': 'pa_wide'}
-
-            # Add needed columns to DataFrame
-            # TODO: Put hard-coded, generic spectral-index of -0.7 somewhere
-            #  sensible
-            data[sky_model_cols['spix']] = np.where(np.isnan(data.alpha),
-                                                    -0.7, data.alpha)
-
-            # Create source masks for field of view and side lobes
-            mask_fov = ast.within_square_fov(
-                cfg.field.fov, cfg.field.coord0.ra.deg,
-                cfg.field.coord0.dec.deg,
-                data[sky_model_cols['ra']], data[sky_model_cols['dec']]
-            )
-
-            cfg_eg_real = cfg.sky_model.extragalactic.real_component
-
-            # Mask which excludes sources below outer flux lower-limit
-            mask_side_lobes = (
-                data[sky_model_cols['fluxI']] > cfg_eg_real.flux_outer
-            )
-
-            # Mask excluding known sources below the transition threshold
-            flux_range_mask = (
-                (data[sky_model_cols['fluxI']] < cfg_eg_real.flux_inner) &
-                (data[sky_model_cols['fluxI']] > cfg_eg_real.flux_transition)
-            )
-
-            # Create SkyComponent instance and save .fits image of GLEAM
-            # sources
-            eg_real = farm.sky_model.SkyComponent.load_from_fits_table(
-                sky_model_cols, fits_eg_real, 'GLEAM', cfg.field.cdelt,
-                cfg.field.coord0, fov=cfg.field.fov,
-                freqs=cfg.correlator.frequencies,
-                flux_range=(cfg_eg_real.flux_transition,
-                            cfg_eg_real.flux_inner),
-                beam={'maj': 2. * 60, 'min': 2. * 60., 'pa': 0.}
-            )
+        elif misc.file_handling.is_osm_table(fits_eg_real):
+            data = misc.file_handling.osm_to_dataframe(fits_eg_real)
         elif misc.fits.is_fits_image(fits_eg_real):
-            errh.raise_error(
-                NotImplementedError,
-                "Currently can only load GLEAM model from fits table"
-            )
+            errh.raise_error(NotImplementedError,
+                             "Can't load known points sources from .fits image")
         else:
             errh.raise_error(Exception, f"Unsure of format of {fits_eg_real}")
 
-        sky_model.add_component(eg_real)
+        # Add needed columns to DataFrame
+        # TODO: Put hard-coded, generic spectral-index of -0.7 somewhere
+        #  sensible
+        data.loc[np.isnan(data.spix), 'spix'] = -0.7
+
+        # Create source masks for field of view and side lobes
+        mask_fov = ast.within_square_fov(
+            cfg.field.fov, cfg.field.coord0.ra.deg,
+            cfg.field.coord0.dec.deg, data.ra, data.dec
+        )
+
+        cfg_eg_real = cfg.sky_model.extragalactic.real_component
+
+        # Mask which excludes sources below outer flux lower-limit
+        mask_side_lobes = data.fluxI > cfg_eg_real.flux_outer
+
+        # Mask excluding known sources below the transition threshold
+        flux_range_mask = (
+            (data.fluxI < cfg_eg_real.flux_inner) &
+            (data.fluxI > cfg_eg_real.flux_transition)
+        )
+
+        # Create SkyComponent instance and save .fits image of GLEAM
+        # sources
+        eg_real = farm.sky_model.SkyComponent.load_from_dataframe(
+            data, 'EG_Known', cfg.field.cdelt,
+            cfg.field.coord0, fov=cfg.field.fov,
+            freqs=cfg.correlator.frequencies,
+            flux_range=(cfg_eg_real.flux_transition,
+                        cfg_eg_real.flux_inner),
+            beam={'maj': 2. * 60, 'min': 2. * 60., 'pa': 0.}
+        )
+        eg_real.write_fits(
+            cfg.output_dcy / f"{eg_real.name}_component.fits",
+            unit='JY/PIXEL'
+        )
+
+        # Below line commented out so that any Gaussian sources are added to
+        # Oskar to deal with
+        # sky_model.add_component(eg_real)
 
         if not model_only:
             # Added to SkyModel instead
             # Add to fov Sky instance
-            # oskar.add_dataframe_to_sky(data[mask_fov & flux_range_mask],
-            #                            sky_fov, sky_model_cols)
+            oskar.add_dataframe_to_sky(data[mask_fov & flux_range_mask],
+                                       sky_fov)
 
             # Add to side-lobes Sky instance
-            oskar.add_dataframe_to_sky(data[mask_side_lobes], sky_side_lobes,
-                                       sky_model_cols)
+            oskar.add_dataframe_to_sky(data[mask_side_lobes], sky_side_lobes)
 
 else:
     LOGGER.info("Not including known point sources into foreground")
@@ -748,18 +742,12 @@ if not model_only:
     farm.software.wsclean(f"{cfg.root_name}.ms", wsclean_args,
                           consolidate_channels=True)
 
-# TODO: GLEAM/LOBES (has spix and deconvolved sizes which OSKAR can make use of)
-
 # Ionospheric simulation altered to 4 hour total, sliced into relevant parts to
 # correspond with scans
 
 # TODO: Explore oskar options for parallelisation and GPU use?
-
 # TODO: Sanity checks need implementing at each stage
-
 # TODO: All-sky view of strong sources
-
-
 # TODO: Remove any intermediate data-products
 
 # ############################################################################ #

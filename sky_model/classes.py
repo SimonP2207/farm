@@ -17,11 +17,8 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.io.fits import Header
 
-from ..miscellaneous.fits import fits_table_to_dataframe
-from ..data.loader import Correlator
-from ..miscellaneous import decorators, error_handling as errh, interpolate_values, generate_random_chars
-from ..physics import astronomy as ast
-from ..software import miriad
+from ..miscellaneous import error_handling as errh
+from ..miscellaneous import decorators
 from . import tb_functions as tbfs
 
 # Typing related code
@@ -30,94 +27,10 @@ SkyClassType = TypeVar('SkyClassType', bound='_BaseSkyClass')
 
 # Miscellaneous functions
 # TODO: Relocate these to a sensible module
-def fits_bunit(fitsfile: pathlib.Path) -> str:
-    """
-    Get brightness unit from .fits header. If 'BUNIT' not present in .fits
-    header, best guess the data unit
-    """
-    header, image_data = fits_hdr_and_data(fitsfile)
-
-    if 'BUNIT' in header:
-        return header["BUNIT"].strip().upper()
-    else:
-        return None
-
-
-def fits_equinox(fitsfile: pathlib.Path) -> float:
-    """Get equinox from .fits header. Assume J2000 if absent"""
-    header, _ = fits_hdr_and_data(fitsfile)
-
-    try:
-        return header["EQUINOX"]
-    except KeyError:
-        # Assume J2000 if information not present in header
-        errh.issue_warning(UserWarning,
-                           "Equinox information not present. Assuming J2000")
-        return 2000.0
-
-
-def fits_hdr_and_data(fitsfile: pathlib.Path) -> Tuple[Header, np.ndarray]:
-    """Return header and data from a .fits image/cube"""
-    with fits.open(fitsfile) as hdulist:
-        return hdulist[0].header, hdulist[0].data
-
-
-def fits_frequencies(fitsfile: pathlib.Path) -> np.ndarray:
-    """Get list of frequencies of a .fits cube, as np.ndarray"""
-    header, _ = fits_hdr_and_data(fitsfile)
-    return fits_hdr_frequencies(header)
-
-
-def fits_hdr_frequencies(header: Header) -> np.ndarray:
-    """Get list of frequencies from a .fits header, as np.ndarray"""
-    freq_min = (header["CRVAL3"] - (header["CRPIX3"] - 1) *
-                header["CDELT3"])
-    freq_max = (header["CRVAL3"] + (header["NAXIS3"] - header["CRPIX3"]) *
-                header["CDELT3"])
-    return np.linspace(freq_min, freq_max, header["NAXIS3"])
-
-
-def hdr2d(n_x: int, n_y: int, coord0, cdelt, frame='fk5') -> Header:
-    hdr = Header({'Simple': True})
-    hdr.set('BITPIX', -32)
-    hdr.set('NAXIS', 2)
-    hdr.set('NAXIS1', n_x)
-    hdr.set('NAXIS2', n_y)
-    hdr.set('CTYPE1', 'RA---SIN')
-    hdr.set('CTYPE2', 'DEC--SIN')
-    hdr.set('CRVAL1', coord0.ra.deg)
-    hdr.set('CRVAL2', coord0.dec.deg)
-    hdr.set('CRPIX1', n_x / 2)
-    hdr.set('CRPIX2', n_y / 2)
-    hdr.set('CDELT1', -cdelt)
-    hdr.set('CDELT2', cdelt)
-    hdr.set('CUNIT1', 'deg     ')
-    hdr.set('CUNIT2', 'deg     ')
-    hdr.set('EQUINOX', {'fk4': 1950., 'fk5': 2000.}[coord0.frame.name])
-
-    return hdr
-
-
-def hdr3d(n_x: int, n_y: int, coord0, cdelt, frequencies: npt.ArrayLike,
-          frame='fk5') -> Header:
-
-    hdr = hdr2d(n_x, n_y, coord0, cdelt, frame)
-    hdr.insert('NAXIS2', ('NAXIS3', len(frequencies)), after=True)
-    hdr.insert('CTYPE2', ('CTYPE3', 'FREQ    '), after=True)
-    hdr.insert('CRVAL2', ('CRVAL3', min(frequencies)), after=True)
-    hdr.insert('CRPIX2', ('CRPIX3', 1), after=True)
-    hdr.insert('CDELT2', ('CDELT3', 1.), after=True)
-    hdr.insert('CUNIT2', ('CUNIT3', 'Hz      '), after=True)
-
-    if len(frequencies) > 1:
-        hdr.set('CDELT3', frequencies[1] - frequencies[0])
-
-    return hdr
-
-
 def deconvolve_cube(input_fits, output_fits, beam):
     """Deconvolves a .fits image with a beam. DO NOT USE: Unstable results"""
     from ..software.miriad import miriad
+    from ..miscellaneous import generate_random_chars
 
     temp_identifier = generate_random_chars(10)
     input_mir_im = pathlib.Path(input_fits.name.rstrip('.fits'))
@@ -142,11 +55,15 @@ def deconvolve_cube(input_fits, output_fits, beam):
 
 
 def hdr2d_from_skymodel(sky_class: Type[SkyClassType]) -> Header:
+    from ..miscellaneous.fits import hdr2d
+
     return hdr2d(sky_class.n_x, sky_class.n_y, sky_class.coord0,
                  sky_class.cdelt, sky_class.coord0.frame.name)
 
 
 def hdr3d_from_skyclass(sky_class: Type[SkyClassType]) -> Header:
+    from ..miscellaneous.fits import hdr3d
+
     if len(sky_class.frequencies) < 1:
         raise ValueError("Can't create Header from SkyClass with no frequency "
                          "information")
@@ -190,12 +107,213 @@ class _BaseSkyClass(ABC):
     VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR')
 
     @classmethod
-    def load_from_fits_table(cls, columns: dict,
-                             fitsfile: Union[pathlib.Path, fits.HDUList],
+    def load_from_oskar_sky_model(cls, osmfile: pathlib.Path,
+                                  name: str, cdelt: float,
+                                  coord0: SkyCoord, fov: Tuple[float, float],
+                                  freqs: npt.ArrayLike,
+                                  flux_range: Tuple[float, float] = (0., 1e30),
+                                  beam: Optional[
+                                      dict] = None) -> 'SkyComponent':
+        """
+        Create a SkyComponent instance from an Oskar sky model
+        (https://ska-telescope.gitlab.io/sim/oskar/sky_model/sky_model.html#sky-model-file)
+
+        Parameters
+        ----------
+        osmfile
+            Full path to oskar sky model text file
+        name
+            Name to give SkyComponent
+        cdelt
+            Cell size [deg]
+        coord0
+            Central pixel coordinate
+        fov
+            Field of view as a tuple (fov_x, fov_y) [deg]
+        freqs
+            Frequencies of the SkyComponent [Hz]
+        flux_range
+            Flux range to INCLUDE [Jy]
+        beam
+            Beam with which to deconvolve dimensions as a dict i.e.
+            {'maj': 120, 'min': 120., 'pa': 0.} [deg]
+
+        Returns
+        -------
+        SkyComponent instance
+        """
+        from ..miscellaneous.file_handling import osm_to_dataframe
+
+        return cls.load_from_dataframe(osm_to_dataframe(osmfile), name, cdelt,
+                                       coord0, fov, freqs, flux_range, beam)
+
+    @classmethod
+    def load_from_dataframe(cls, df: pd.DataFrame,
+                            name: str, cdelt: float,
+                            coord0: SkyCoord, fov: Tuple[float, float],
+                            freqs: npt.ArrayLike,
+                            flux_range: Tuple[float, float] = (0., 1e30),
+                            beam: Optional[dict] = None) -> 'SkyComponent':
+        """
+        Create a SkyComponent instance from pandas.DataFrame instance
+
+        Parameters
+        ----------
+        df
+            pandas.DataFrame with columns 'ra', 'dec', 'fluxI', 'fluxQ',
+            'fluxU', 'fluxV', 'freq0', 'spix', 'RM', 'maj', 'min', and 'pa'
+        name
+            Name to give SkyComponent
+        cdelt
+            Cell size [deg]
+        coord0
+            Central pixel coordinate
+        fov
+            Field of view as a tuple (fov_x, fov_y) [deg]
+        freqs
+            Frequencies of the SkyComponent [Hz]
+        flux_range
+            Flux range within to include sources [Jy]
+        beam
+            Beam with which to deconvolve dimensions as a dict i.e.
+            {'maj': 120, 'min': 120., 'pa': 0.} [deg]
+
+        Returns
+        -------
+        SkyComponent instance
+        """
+        from astropy import wcs
+        from ..physics import astronomy as ast
+        from ..miscellaneous import image_functions as imfunc
+        from ..miscellaneous import generate_random_chars
+        from ..miscellaneous.fits import hdr3d
+
+
+        # Set up fits header, WCS and data array
+        im_hdr = hdr3d(int(fov[0] // cdelt),
+                       int(fov[1] // cdelt),
+                       coord0, cdelt, freqs, 'fk5')
+        im_hdr.insert('CUNIT3', ('BUNIT', 'JY/PIXEL'), after=True)
+        im_wcs = wcs.WCS(im_hdr)
+        im_data = np.zeros((im_hdr['NAXIS3'],
+                            im_hdr['NAXIS2'],
+                            im_hdr['NAXIS1']))
+
+        # Set up pixel grid and coordinate grid
+        zz, yy, xx = np.meshgrid(np.arange(im_hdr['NAXIS3']),
+                                 np.arange(im_hdr['NAXIS2']),
+                                 np.arange(im_hdr['NAXIS1']), indexing='ij')
+        rra, ddec, ffreq = im_wcs.wcs_pix2world(xx, yy, zz, 0)
+
+        flux_range_mask = ((df['fluxI'] >= flux_range[0]) &
+                           (df['fluxI'] <= flux_range[1]))
+
+        fov_mask = ast.within_square_fov(
+            fov, coord0.ra.deg, coord0.dec.deg, df.ra, df.dec
+        )
+        df = df[fov_mask & flux_range_mask]
+        df.loc[np.isnan(df.spix), 'spix'] = -0.7
+        area = np.pi * df['min'] * df.maj * 2.3504430539e-11 / (4. * np.log(2.))
+        df['intensityI'] = df.fluxI / area  # Jy / sr
+
+        # Deconvolve given sizes from beam, if given
+        if beam:
+            if not np.isclose(beam['maj'], beam['min'], rtol=1e-2):
+                errh.raise_error(ValueError,
+                                 "Circular beams only for deconvolution of "
+                                 "point source table ")
+
+            df['maj'] = deconvolve_fwhm(df['maj'], beam['maj'])
+            df['min'] = deconvolve_fwhm(df['min'], beam['min'])
+
+            # Default size for sources smaller than the beam
+            point_source_size = cdelt / 3.  # Nyquist sampling
+            df.loc[np.isnan(df['maj']), 'maj'] = point_source_size
+            df.loc[np.isnan(df['min']), 'min'] = point_source_size
+            df.loc[np.isnan(df['pa']), 'pa'] = 0.
+            # df['maj'] = np.where(np.isnan(df['maj']),
+            #                      point_source_size, df['maj'])
+            #
+            # df['min'] = np.where(np.isnan(df['min']),
+            #                      point_source_size, df['min'])
+
+        # Peak intensity calculation in Jy/pixel. Follows following page, which
+        # defines volume under Gaussian (i.e. integrated flux) as
+        # int_flux = 2 * pi * peak_flux * major * minor
+        # https://en.wikipedia.org/wiki/Gaussian_function#Two-dimensional_Gaussian_function
+        area = np.pi * df['min'] * df.maj * 2.3504430539e-11 / (4. * np.log(2.))
+        df['peak_int'] = df.fluxI / area
+
+        df.loc[np.isinf(df.peak_int), 'peak_int'] = df.fluxI[np.isinf(df.peak_int)]
+        df.peak_int[np.isinf(df.peak_int)] = df.fluxI[np.isinf(df.peak_int)]
+
+        # Fix any rows in the dataframe with dimensions == 0
+        row_mask = (df.maj == 0) | (df.min == 0)
+        df.loc[row_mask, 'maj'] = cdelt / 3. * 3600.
+        df.loc[row_mask, 'min'] = cdelt / 3. * 3600.
+
+        # Loop through all sources and add to grid
+        for _, row in df.iterrows():
+            idxs = im_wcs.world_to_array_index_values(
+                row['ra'], row['dec'], freqs[0]
+            )
+
+            # Width in indices of sub-array within data to calculate source flux
+            didx = int(row['maj'] * 2 / 3600. // cdelt + 1)
+            didx = np.max([didx, 5])
+
+            # Index ranges in ra and dec within which to calculate source flux
+            ra_idx = (np.max([idxs[2] - didx, 0]),
+                      np.min([idxs[2] + didx, im_hdr['NAXIS1']]))
+
+            dec_idx = (np.max([idxs[1] - didx, 0]),
+                       np.min([idxs[1] + didx, im_hdr['NAXIS2']]))
+
+            rra_ = rra[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
+            ddec_ = ddec[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
+
+            # If source if near RA = 0, imfunc.gaussian_2d is given coordinates
+            # in rra_ that it calculates are ~360deg from source position (due
+            # to the wrapped nature of RA, which imfunc.gaussian_2d is unaware
+            # of) leading to zeroes. Therefore unwrap the rra_ coordinates if
+            # required
+            if np.ptp(rra_) > 180:
+                ra0 = row['ra']
+                rra_ = np.where(np.abs(rra_ - ra0) > 180,
+                                rra_ + (360. if ra0 > 180 else -360.),
+                                rra_)
+
+            val0 = imfunc.gaussian_2d(rra_, ddec_,
+                                      row['ra'], row['dec'],
+                                      row['peak_int'],
+                                      row['maj'],
+                                      row['min'],
+                                      row['pa'])
+
+            for freq_idx in range(len(freqs)):
+                vals = val0 * (freqs[freq_idx] /
+                               row['freq0']) ** row['spix']
+                im_data[freq_idx,
+                        dec_idx[0]:dec_idx[1],
+                        ra_idx[0]:ra_idx[1]] += vals
+
+        # Generate temporary .fits image to call load_from_fits method on
+        hdu = fits.PrimaryHDU(data=im_data, header=im_hdr)
+        temp_identifier = generate_random_chars(10)
+        temp_fits_file = pathlib.Path(f"{name}_temp_{temp_identifier}.fits")
+        hdu.writeto(temp_fits_file, overwrite=True)
+
+        sky_comp = cls.load_from_fits(temp_fits_file, name, cdelt, coord0)
+        temp_fits_file.unlink()
+
+        return sky_comp
+
+    @classmethod
+    def load_from_fits_table(cls, fitsfile: Union[pathlib.Path, fits.HDUList],
                              name: str, cdelt: float,
                              coord0: SkyCoord, fov: Tuple[float, float],
                              freqs: npt.ArrayLike,
-                             flux_range: Tuple[float, float] = [0., 1e30],
+                             flux_range: Tuple[float, float] = (0., 1e30),
                              beam: Optional[dict] = None) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits table file or HDUList
@@ -203,20 +321,12 @@ class _BaseSkyClass(ABC):
 
         Parameters
         ----------
-        columns
-            Dictionary of columns whose keys are 'ra', 'dec', 'fluxI', 'freq0',
-            'spix', 'maj', 'min', and 'pa' and corresponding values are the
-            column names corresponding to those parameters within the fits
-            table. For example:
-                {'ra': 'RAJ2000', 'dec': 'DEJ2000', 'fluxI': 'int_flux_wide',
-                 'freq0': 'freq0', 'spix': 'alpha', 'maj': 'a_wide',
-                 'min': 'b_wide', 'pa': 'pa_wide'}
         fitsfile
             pathlib.Path to .fits table, or HDUList instance
         name
             Name to give returned SkyComponent instance
         cdelt
-            Cells size [deg]
+            Cell size [deg]
         coord0
             Central coordinate
         fov
@@ -247,133 +357,20 @@ class _BaseSkyClass(ABC):
         ValueError
             If non-circular beam is specified as the beam argument
         """
-        from astropy import wcs
-        from ..miscellaneous import image_functions as imfunc
-
-        # Set up fits header, WCS and data array
-        im_hdr = hdr3d(int(fov[0] // cdelt),
-                       int(fov[1] // cdelt),
-                       coord0, cdelt, freqs, 'fk5')
-        im_hdr.insert('CUNIT3', ('BUNIT', 'JY/PIXEL'), after=True)
-        im_wcs = wcs.WCS(im_hdr)
-        im_data = np.zeros((im_hdr['NAXIS3'],
-                            im_hdr['NAXIS2'],
-                            im_hdr['NAXIS1']))
-
-        # Set up pixel grid and coordinate grid
-        zz, yy, xx = np.meshgrid(np.arange(im_hdr['NAXIS3']),
-                                 np.arange(im_hdr['NAXIS2']),
-                                 np.arange(im_hdr['NAXIS1']), indexing='ij')
-        rra, ddec, ffreq = im_wcs.wcs_pix2world(xx, yy, zz, 0)
+        from ..miscellaneous.fits import fits_table_to_dataframe
 
         if isinstance(fitsfile, pathlib.Path):
             data = fits_table_to_dataframe(fitsfile)
         elif isinstance(fitsfile, fits.HDUList):
             data = pd.DataFrame.from_records(fitsfile[1].data)
         else:
+            data = None
             errh.raise_error(TypeError, f"{fitsfile} not an HDUList instance "
                                         "or path to a .fits table")
 
-        data[columns['spix']] = np.where(np.isnan(data.alpha), -0.7, data.alpha)
-        fov_mask = ast.within_square_fov(
-            fov, coord0.ra.deg, coord0.dec.deg,
-            data[columns['ra']], data[columns['dec']]
-        )
+        return cls.load_from_dataframe(data, name, cdelt, coord0, fov, freqs,
+                                       flux_range, beam)
 
-        flux_range_mask = ((data[columns['fluxI']] >= flux_range[0]) &
-                           (data[columns['fluxI']] <= flux_range[1]))
-
-        data = data[fov_mask & flux_range_mask]
-
-        # Deconvolve given sizes from beam, if given
-        if beam:
-            if not np.isclose(beam['maj'], beam['min'], rtol=1e-2):
-                errh.raise_error(ValueError,
-                                 "Circular beams only for deconvolution of "
-                                 "point source table ")
-
-            data[columns['maj']] = deconvolve_fwhm(
-                data[columns['maj']], beam['maj']
-            )
-            data[columns['min']] = deconvolve_fwhm(
-                data[columns['min']], beam['min']
-            )
-
-            # Default size for sources smaller than the beam
-            point_source_size = cdelt / 5.
-            data[columns['maj']] = np.where(
-                np.isnan(data[columns['maj']]),
-                point_source_size, data[columns['maj']]
-            )
-
-            data[columns['min']] = np.where(
-                np.isnan(data[columns['min']]),
-                point_source_size, data[columns['min']]
-            )
-
-        # Peak intensity calculation in Jy/pixel
-        data['peak_int'] = (
-                data[columns['fluxI']] * np.sqrt(2. * np.log(2.)) /
-                (np.pi * data[columns['maj']] *
-                 data[columns['min']] * 2.350443e-11) *
-                np.radians(cdelt) ** 2.
-        )
-
-        # Loop through all sources and add to grid
-        for _, row in data.iterrows():
-            idxs = im_wcs.world_to_array_index_values(
-                row[columns['ra']], row[columns['dec']], freqs[0]
-            )
-
-            # Width in indices of sub-array within data to calculate source flux
-            didx = int(row[columns['maj']] * 2 / 3600. // cdelt + 1)
-            didx = np.max([didx, 5])
-
-            # Index ranges in ra and dec within which to calculate source flux
-            ra_idx = (np.max([idxs[2] - didx, 0]),
-                      np.min([idxs[2] + didx, im_hdr['NAXIS1']]))
-
-            dec_idx = (np.max([idxs[1] - didx, 0]),
-                       np.min([idxs[1] + didx, im_hdr['NAXIS2']]))
-
-            rra_ = rra[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
-            ddec_ = ddec[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
-
-            # If source if near RA = 0, imfunc.gaussian_2d is given coordinates
-            # in rra_ that it calculates are ~360deg from source position (due
-            # to the wrapped nature of RA, which imfunc.gaussian_2d is unaware
-            # of) leading to zeroes. Therefore unwrap the rra_ coordinates if
-            # required
-            if np.ptp(rra_) > 180:
-                ra0 = row[columns['ra']]
-                rra_ = np.where(np.abs(rra_ - ra0) > 180,
-                                rra_ + (360. if ra0 > 180 else -360.),
-                                rra_)
-
-            val0 = imfunc.gaussian_2d(rra_, ddec_,
-                                      row[columns['ra']], row[columns['dec']],
-                                      row['peak_int'],
-                                      row[columns['maj']],
-                                      row[columns['min']],
-                                      row[columns['pa']])
-
-            for freq_idx in range(len(freqs)):
-                vals = val0 * (freqs[freq_idx] /
-                               row[columns['freq0']]) ** row[columns['spix']]
-                im_data[freq_idx,
-                        dec_idx[0]:dec_idx[1],
-                        ra_idx[0]:ra_idx[1]] += vals
-
-        # Generate temporary .fits image to call load_from_fits method on
-        hdu = fits.PrimaryHDU(data=im_data, header=im_hdr)
-        temp_identifier = generate_random_chars(10)
-        temp_fits_file = pathlib.Path(f"{name}_temp_{temp_identifier}.fits")
-        hdu.writeto(temp_fits_file, overwrite=True)
-
-        sky_comp = cls.load_from_fits(temp_fits_file, name, cdelt, coord0)
-        temp_fits_file.unlink()
-
-        return sky_comp
 
     @classmethod
     @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
@@ -423,6 +420,8 @@ class _BaseSkyClass(ABC):
             understood
         """
         from .. import LOGGER
+        from ..physics import astronomy as ast
+        from ..miscellaneous.fits import fits_hdr_and_data, fits_frequencies, fits_equinox, fits_bunit
 
         LOGGER.info(f"Loading {str(fitsfile.resolve())}")
         if not fitsfile.exists():
@@ -462,6 +461,8 @@ class _BaseSkyClass(ABC):
             freqs = fits_freqs  # Spectral axis information
             data = fits_data
         else:
+            from ..miscellaneous import interpolate_values
+
             freqs.sort()  # Ensure freqs are sorted numerically
             data = np.empty((len(freqs), ny, nx), dtype=np.float32)
             for idx, freq in enumerate(freqs):
@@ -555,6 +556,8 @@ class _BaseSkyClass(ABC):
         ValueError
             If the given unit is not one of {0}, or is not understood
         """
+        from ..physics import astronomy as ast
+
         data_ = None
         if unit not in self.VALID_UNITS:
             errh.raise_error(ValueError,
@@ -655,6 +658,8 @@ class _BaseSkyClass(ABC):
         -------
         np.ndarray of intensities with shape (self.n_x, self.n_y)
         """
+        from ..physics import astronomy as ast
+
         return ast.tb_to_intensity(self.t_b(freq), freq)
 
     def flux_nu(self, freq: Union[float, npt.ArrayLike]):
@@ -670,6 +675,8 @@ class _BaseSkyClass(ABC):
         -------
         np.ndarray of fluxes with shape (self.n_x, self.n_y)
         """
+        from ..physics import astronomy as ast
+
         solid_angle = np.radians(self.cdelt) ** 2.
 
         return ast.intensity_to_flux(self.i_nu(freq), solid_angle)
@@ -737,6 +744,9 @@ class _BaseSkyClass(ABC):
             In the unlikely event that the randomly generated name for a
             created, temporary file already exists (very unlikely!)
         """
+        from ..software import miriad
+        from ..miscellaneous import generate_random_chars
+
         temp_dir = pathlib.Path(tempfile.gettempdir())
         temp_pfx = temp_dir.joinpath(str(miriad_image.name).replace('.', '_'))
         temp_identifier = generate_random_chars(10)
@@ -774,6 +784,9 @@ class _BaseSkyClass(ABC):
         -------
         New sky model regridded onto template grid
         """
+        from ..software import miriad
+        from ..miscellaneous import generate_random_chars
+
         # TODO: Implement check here that self is in field of view of template
 
         # Define temporary images
@@ -913,7 +926,8 @@ class _BaseSkyClass(ABC):
         return True
 
     def same_spectral_setup(self,
-                            other: Union[Type[SkyClassType], Correlator]) -> bool:
+                            other: Union[Type[SkyClassType],
+                                         'Correlator']) -> bool:
         """
         Check if matching frequencies are present in two sky class instances
 
@@ -1016,6 +1030,8 @@ class SkyComponent(_BaseSkyClass):
         the two SkyComponent instances
         """
         from pathlib import Path
+        from ..software import miriad
+        from ..miscellaneous import generate_random_chars
 
         if new_name is None:
             new_name = f"{self.name}+{other.name}"
@@ -1152,6 +1168,8 @@ class SkyModel(_BaseSkyClass):
             If one of components/the component being added is not an instance of
             the SkyComponent class or its children
         """
+        from ..physics import astronomy as ast
+
         if isinstance(new_component, (list, tuple, np.ndarray)):
             for component in new_component:
                 self.add_component(component)
