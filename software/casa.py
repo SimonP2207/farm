@@ -95,4 +95,5 @@ except ModuleNotFoundError:
     tasks.add_member(tclean=_CasaTask('tclean'),
                      exportuvfits=_CasaTask('exportuvfits'),
                      importuvfits=_CasaTask('importuvfits'),
-                     vishead=_CasaTask('vishead'),)
+                     vishead=_CasaTask('vishead'),
+                     concat=_CasaTask('concat'),)
