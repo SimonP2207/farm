@@ -402,14 +402,17 @@ if cfg.sky_model.extragalactic.real_component.include:
 
         data = None
         LOGGER.info("Loading catalogue")
-        if misc.fits.is_fits_table(fits_eg_real):
-            # Parse .fits table data
-            data = misc.fits.fits_table_to_dataframe(fits_eg_real)
+        if misc.fits.is_fits(fits_eg_real):
+            if misc.fits.is_fits_table(fits_eg_real):
+                # Parse .fits table data
+                data = misc.fits.fits_table_to_dataframe(fits_eg_real)
+            else:
+                errh.raise_error(NotImplementedError,
+                                 "Can't load known points sources from .fits"
+                                 "image")
         elif misc.file_handling.is_osm_table(fits_eg_real):
             data = misc.file_handling.osm_to_dataframe(fits_eg_real)
-        elif misc.fits.is_fits_image(fits_eg_real):
-            errh.raise_error(NotImplementedError,
-                             "Can't load known points sources from .fits image")
+
         else:
             errh.raise_error(Exception, f"Unsure of format of {fits_eg_real}")
 
