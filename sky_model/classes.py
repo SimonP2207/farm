@@ -211,7 +211,8 @@ class _BaseSkyClass(ABC):
         fov_mask = ast.within_square_fov(
             fov, coord0.ra.deg, coord0.dec.deg, df.ra, df.dec
         )
-        df = df[fov_mask & flux_range_mask]
+
+        df = df.drop(df.index[~(fov_mask & flux_range_mask)])
         df.loc[np.isnan(df.spix), 'spix'] = -0.7
         area = np.pi * df['min'] * df.maj * 2.3504430539e-11 / (4. * np.log(2.))
         df['intensityI'] = df.fluxI / area  # Jy / sr

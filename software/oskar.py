@@ -67,13 +67,13 @@ def add_dataframe_to_sky(df: pd.DataFrame, sky: Sky,
     -------
     None
     """
-    if col_dict:
-        df_to_oskar_dict = {}
-        for k, v in col_dict.items():
-            if v is not None:
-                df_to_oskar_dict[oskar_sky_model_cols[k]] = df[v]
-    else:
-        df_to_oskar_dict = {v: k for k, v in oskar_sky_model_cols.items()}
+    if not col_dict:
+        col_dict = {k: k for k in oskar_sky_model_cols.keys()}
+
+    df_to_oskar_dict = {}
+    for k, v in col_dict.items():
+        if v is not None:
+            df_to_oskar_dict[oskar_sky_model_cols[k]] = df[v]
 
     sky.append_sources(**df_to_oskar_dict)
 

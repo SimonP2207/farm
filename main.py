@@ -195,10 +195,13 @@ if len(sys.argv) != 1:
     log_level = logging.DEBUG if args.debug else logging.INFO
 else:
     config_file = pathlib.Path(farm.data.FILES['EXAMPLE_CONFIG'])
-    model_only = True
+    model_only = False
     log_level = logging.DEBUG
 
 cfg = loader.FarmConfiguration(config_file)
+if len(sys.argv) != 1:
+    os.chdir(cfg.output_dcy)
+
 # ############################################################################ #
 # ######################## Set up the logger ################################# #
 # ############################################################################ #
@@ -446,7 +449,7 @@ if cfg.sky_model.extragalactic.real_component.include:
             freqs=cfg.correlator.frequencies,
             flux_range=(cfg_eg_real.flux_transition,
                         cfg_eg_real.flux_inner),
-            beam={'maj': 2. * 60, 'min': 2. * 60., 'pa': 0.}
+            beam=None
         )
         eg_real.write_fits(
             cfg.output_dcy / f"{eg_real.name}_component.fits",
