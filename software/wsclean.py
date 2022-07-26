@@ -292,7 +292,7 @@ def wsclean(ms_list: Union[Union[str, pathlib.Path],
             im_hdr = hdul[0].header
 
         # Remove all traces of Stokes axis in .fits
-        for kw in ('CRPIX4', 'CDELT4', 'CUNIT4', 'CRVAL4'):
+        for kw in ('CRPIX4', 'CDELT4', 'CUNIT4', 'CRVAL4', 'CTYPE4'):
             im_hdr.remove(kw, ignore_missing=True, remove_all=True)
 
         for im_type in products:

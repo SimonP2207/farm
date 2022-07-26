@@ -26,8 +26,21 @@
 
 ## Installation help
 
-For the python modules detailed above (and their dependencies (e.g. `gsl`), installation within a virtual environment is a possible method. Instructions for virtual environment creation and installing those dependencies listed above is shown below (requires a conda insallation).
+For the python modules detailed above (and their dependencies (e.g. `gsl`), installation within a virtual environment is a recommended, possible method. Instructions for virtual environment creation and installing those dependencies listed above is shown below (requires a conda installation).
+### Creation of virtual environment via environment.yaml
+Possibly the easiest way of creating the virtual environment would be to use conda in conjunction with the `environment.yaml` file, which lists FARM's dependencies, including pip-installed git repositories. This can be achieved via:
 
+```commandline
+conda env create -f environment.yaml
+```
+
+Subsequently, you can activate the farm virtual environment via:
+
+```commandline
+conda activate farm
+```
+
+### Manual creation of virtual environment
 **NOTE**: Installation of `py21cmFAST` on MacOSX leads to issues during compilation with the error, `clang: error: unsupported option '-fopenmp'` being thrown when installing via `pip install `. To properly resolve this and install `py21cmFAST` is detailed [here](https://github.com/21cmfast/21cmFAST/issues/84).
 
 ```commandline
@@ -49,7 +62,7 @@ conda install -c conda-forge 21cmFAST
 # powerbox
 conda install -c conda-forge pyfftw
 conda install pip git
-pip install git+git://github.com/steven-murray/powerbox.git
+pip install git+https://github.com/steven-murray/powerbox.git
 
 # Global diffuse sky model
 pip install git+https://github.com/telegraphic/pygdsm
