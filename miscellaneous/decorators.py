@@ -5,7 +5,7 @@ import inspect
 from functools import wraps
 import logging
 import warnings
-from typing import Callable, Any
+from typing import Callable, Any, Tuple
 
 
 def ensure_is_fits(*files):
@@ -99,3 +99,22 @@ def suppress_warnings(*modules) -> Callable:
             return result
         return wrapper
     return decorator
+
+
+def time_it(func: Callable) -> Callable:
+    """
+    Time the execution of a function and return a 2-tuple of time [s] taken and
+    returned values
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs) -> Tuple[float, Any]:
+        """Decorated function"""
+        from datetime import datetime
+
+        t_start = datetime.now()
+        returned = func(*args, **kwargs)
+        t_end = datetime.now()
+        dt = (t_end - t_start).total_seconds()
+
+        return dt, returned
+    return wrapper

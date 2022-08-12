@@ -11,9 +11,10 @@ import subprocess
 import sys
 import warnings
 import pathlib
+from typing import Optional
 
 from . import common as sfuncs
-from ..miscellaneous import error_handling as errh, decorators
+from ..miscellaneous import error_handling as errh, decorators, generate_random_chars
 
 MIR_CHAR_LIMIT = 64
 LONG_KEYS = ('tin', 'out', 'vis', 'model')
@@ -282,6 +283,7 @@ class Miriad(object):
 
 
 miriad = Miriad()
+
 # Uncomment if you want all tasks explicitly in exported namespace. Just takes
 # a while to load them all...
 # for task in mir_commands():

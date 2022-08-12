@@ -1,9 +1,152 @@
 """
-All methods/classes related to image handling
+All methods/classes related to image handling/manipulation
 """
-from typing import Union, Tuple
+import shutil
+import pathlib
+from typing import Union, Tuple, Optional
 import numpy as np
 import numpy.typing as npt
+
+from .. import LOGGER
+
+
+def pb_multiply(in_image: pathlib.Path, pb: pathlib.Path,
+                out_fitsfile: pathlib.Path, cellscal: str = 'CONSTANT'):
+    """
+    Multiply (not divide i.e. 'pbcor') an image by the primary beam
+
+    Parameters
+    ----------
+    in_image
+        Image to multiply by the primary beam
+    pb
+        Primary beam to multiply image with
+    out_fitsfile
+        Full path to output image containing image multiplied by the primary
+        beam
+    cellscal
+        Whether to scale cell size with the inverse of frequency ('1/F') or not
+        ('CONSTANT', the default). Must be one of '1/F' or 'CONSTANT'
+    """
+    from . import error_handling as errh
+    from . import generate_random_chars as grc
+    from ..software.miriad import miriad
+
+    if cellscal.lower() not in ('constant', '1/f'):
+        errh.raise_error(ValueError,
+                         "cellscal must be one of 'CONSTANT' or '1/F', "
+                         f"not {cellscal}")
+    cellscal = cellscal.upper()
+
+    LOGGER.info(f"Multiplying {in_image} by beam response, {pb} with "
+                f"{cellscal} cell size scaling in frequency")
+
+    # Convert input image and PB to miriad image format if necessary
+    if not is_miriad_image(pb):
+        pb_mirim = pb.with_suffix('.im')
+        miriad.fits(op="xyin", _in=pb, out=pb_mirim)
+    else:
+        pb_mirim = pb
+
+    if not is_miriad_image(in_image):
+        in_image_mirim = in_image.with_suffix('.im')
+        miriad.fits(op='xyin', _in=in_image, out=in_image_mirim)
+    else:
+        in_image_mirim = in_image
+
+    expr = f"<{in_image_mirim}>*<{pb_mirim}>"
+    out_mirim = out_fitsfile.with_suffix('.im')
+    if cellscal == '1/F':
+        naxis3 = int(miriad.gethd(_in=f'{pb_mirim}/naxis3'))
+        crpix3 = int(miriad.gethd(_in=f'{pb_mirim}/crpix3'))
+        cdelt3 = float(miriad.gethd(_in=f'{pb_mirim}/cdelt3'))  # GHz
+        crval3 = float(miriad.gethd(_in=f'{pb_mirim}/crval3'))  # GHz
+        freq_min = crval3 - cdelt3 * (crpix3 - 1)
+        freq_max = crval3 + cdelt3 * (naxis3 - crpix3)
+
+        expr += "/z**2"
+        zs = f"1,{freq_max / freq_min:.6f}"
+        temp_out_mirim = out_mirim.parent / f'temp_{grc(10)}.mirim'
+        temp2_out_mirim = out_mirim.parent / f'temp_{grc(10)}.mirim'
+        try:
+            miriad.maths(exp=expr, out=temp_out_mirim, zrange=zs)
+            shutil.copytree(temp_out_mirim, temp2_out_mirim)
+            miriad.puthd(_in=f"{temp2_out_mirim}/cellscal", value=cellscal)
+            miriad.regrid(_in=temp_out_mirim, tin=temp2_out_mirim,
+                          out=out_mirim)
+        finally:
+            if temp_out_mirim.exists():
+                shutil.rmtree(temp_out_mirim)
+            if temp2_out_mirim.exists():
+                shutil.rmtree(temp2_out_mirim)
+    else:
+        miriad.maths(exp=expr, out=out_mirim)
+
+    miriad.fits(_in=out_mirim, out=out_fitsfile, op='xyout')
+
+
+def regrid_fits(fits_in: pathlib.Path, template_im: pathlib.Path,
+                fits_out: Optional[pathlib.Path] = None, inplace=True):
+    """
+    Regrid a .fits file using a template (either a miriad image or .fits)
+
+    Parameters
+    ----------
+    fits_in
+        Full path to .fits image to be regridded
+    template_im
+        Full path to miriad image, or .fits image, providing the coordinate
+        system to regrid to
+    fits_out
+        Full path to write regridded .fits image to. If None, inplace must be
+        True. Default is None
+    inplace
+        Whether to regrid the input .fits image in place or write a new .fits
+        image to fits_out. If inplace is False, fits_out must not be None.
+        Default is True
+    """
+    from . import generate_random_chars as grc
+    from ..software.miriad import miriad
+
+    LOGGER.info(f"Regridding {fits_in} using {template_im} as a template")
+    temp_mir_im_in = f'temp_mirim_in_{grc(10)}.im'
+    temp_mir_im_out = f'temp_mirim_{grc(10)}.im'
+    miriad.fits(_in=fits_in, op='xyin', out=temp_mir_im_in)
+
+    if not is_miriad_image(template_im):
+        LOGGER.info(f"Converting template, {template_im}, from fits to miriad "
+                    f"image for regridding")
+        temp_mir_im_template = f'temp_mirim_template_{grc(10)}.im'
+        miriad.fits(_in=template_im, op='xyin', out=temp_mir_im_template)
+        miriad.regrid(_in=temp_mir_im_in, tin=temp_mir_im_template,
+                      out=temp_mir_im_out)
+        shutil.rmtree(temp_mir_im_template)
+
+    else:
+        miriad.regrid(_in=temp_mir_im_in, tin=template_im, out=temp_mir_im_out)
+
+    if inplace:
+        fits_in.unlink()
+        fits_out = fits_in
+
+    LOGGER.info(f"Writing regridded image to {fits_out}")
+    miriad.fits(_in=temp_mir_im_out, op='xyout', out=fits_out)
+
+    shutil.rmtree(temp_mir_im_in)
+    shutil.rmtree(temp_mir_im_out)
+
+
+def is_miriad_image(mir_im: pathlib.Path):
+    """Check if an image is a miriad image"""
+    if not mir_im.exists():
+        return False
+    if not mir_im.is_dir():
+        return False
+
+    contents = [_.name for _ in mir_im.iterdir()]
+    req_contents = ('header', 'history', 'image')
+
+    return all([req_content in contents for req_content in req_contents])
 
 
 def calculate_spix(data_cube: npt.ArrayLike,

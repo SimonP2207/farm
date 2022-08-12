@@ -2,9 +2,11 @@
 Contains all plotting related functionality, matplotlib being data visualisation
 tool-of-choice
 """
-from typing import Union, Tuple, List
+import pathlib
+from typing import Union, Tuple, Optional, List
 import numpy as np
 import numpy.typing as npt
+from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation
 import matplotlib.pylab as plt
@@ -14,6 +16,7 @@ from matplotlib.ticker import MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from ..sky_model.classes import SkyClassType
+from ..data.loader import Telescope
 from .image_functions import calculate_spix
 from . import decorators
 
@@ -55,6 +58,10 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
         assigned
     precision
         Number of decimal points of precision on spectral index scale
+    vmin
+        Minimum flux on colourscale
+    vmax
+        Maximum flux on colourscale
     ax
         matplotlib.axes.Axes instance to plot onto. If None (default),
         matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
@@ -79,7 +86,6 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
     """
     if sky_model_type is not None:
         data_cube = sky_model_type.data("JY/PIXEL")
-        frequencies = sky_model_type.frequencies
         extent = (sky_model_type.n_x * sky_model_type.cdelt,
                   sky_model_type.n_y * sky_model_type.cdelt)
     else:
@@ -89,7 +95,6 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
 
     # data_cube += 0.0033611419381985564 - np.nanmean(data_cube)
     flux_ = np.nanmean(data_cube, axis=0)
-
 
     fac_precision = 1.0
     for i in range(precision):
@@ -191,6 +196,10 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
         assigned
     precision
         Number of decimal points of precision on spectral index scale
+    vmin
+        Minimum spectral index on colourscale
+    vmax
+        Maximum spectral index on colourscale
     ax
         matplotlib.axes.Axes instance to plot onto. If None (default),
         matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
@@ -237,7 +246,8 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
+        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES,
+                                              SUBPLOT_WIDTH_INCHES * 1.05))
     else:
         fig = ax.figure
 
@@ -321,7 +331,8 @@ def power_spectrum(sky_model_type: SkyClassType, freq: float,
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(4, 4 * 1.05))
+        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES,
+                                              SUBPLOT_WIDTH_INCHES* 1.05))
     else:
         fig = ax.figure
 
@@ -470,3 +481,86 @@ def target_altaz(t0: Time,
         plt.close()
 
     return fig, (ax, cax)
+
+
+def plot_dtec(
+        tscop: Telescope, tec_fits: pathlib.Path,
+        ax: Optional[matplotlib.pylab.Axes] = None,
+        savefig: Union[bool, pathlib.Path] = False
+) -> Tuple[matplotlib.pyplot.Figure, matplotlib.pyplot.Axes]:
+    """
+    Plot the differential total electron content (dTEC) relative to the
+    central-most antenna in an array
+
+    Parameters
+    ----------
+    tscop
+        Telescope instance containing array information
+    tec_fits
+        .fits cube of the TEC-screen with axes (freq, time, y, x)
+    ax
+        Axes instance to plot to. If not given, a new Axes instance in created
+        (default)
+    savefig
+        If a pathlib.Path is given the figure will be save to it. If False,
+        figure will not be saved (default)
+
+    Returns
+    -------
+    (matplotlib.pylab.Figure, matplotlib.pylab.Axes) instances
+    """
+    import astropy.units as u
+    from astropy.wcs import WCS
+
+    with fits.open(tec_fits) as hdul:
+        hdr = hdul[0].header
+        data = hdul[0].data
+
+    wcs = WCS(hdr)
+    dtecs = {k: [] for k, _ in tscop.stations.items()}
+
+    # Get TECs for reference antenna
+    _, __, iy, ix = wcs.world_to_array_index_values(
+        tscop.stations[tscop.ref_ant].position[0],
+        tscop.stations[tscop.ref_ant].position[1], 0 * u.s, 1e8 * u.Hz
+    )
+    central_tecs = data[0, :, iy, ix]
+
+    for n_station in tscop.stations.keys():
+        _, __, iy, ix = wcs.world_to_array_index_values(
+            tscop.stations[n_station].position[0],
+            tscop.stations[n_station].position[1], 0 * u.s, 1e8 * u.Hz
+        )
+        dtecs[n_station] = data[0, :, iy, ix] - central_tecs
+
+    # Calculate all times of the TEC .fits cube
+    ts = (hdr['CRVAL3'] +
+          np.arange(1, hdr['NAXIS3'] + 1) * hdr['CDELT3'] -
+          hdr['CRPIX3'] * hdr['CDELT3'])
+    ts = (ts - np.min(ts)) / 3600.  # in hours with first time as t = 0hr
+
+    plt.close('all')
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES * 2,
+                                              SUBPLOT_WIDTH_INCHES))
+    else:
+        fig = plt.gcf()
+
+    for n_station in tscop.stations.keys():
+        ax.plot(ts, dtecs[n_station], ls='-', color=(0, 0, 1, 0.02))
+
+    ax.set_xlim(ts.min(), ts.max())
+    ax.set_ylim(-np.max(np.abs(ax.get_ylim())), np.max(np.abs(ax.get_ylim())))
+
+    ax.set_xlabel(r'$t - t_0 \, \left[ \mathrm{hr} \right]$')
+    ax.set_ylabel(r'$\mathrm{dTEC} \, \left[ \mathrm{TECU} \right]$')
+
+    ax.minorticks_on()
+    ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
+                   right=True, direction='in')
+
+    if savefig:
+        plt.savefig(savefig, dpi=300, bbox_inches='tight')
+
+    return fig, ax

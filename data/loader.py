@@ -4,15 +4,17 @@ All methods related to the loading of FARM configuration files
 import datetime
 import random
 from pathlib import Path
-from typing import Union, List, Tuple, Any
+from typing import Union, List, Tuple, Any, Optional, Dict
 from dataclasses import dataclass, field
 
 import numpy as np
+import numpy.typing as npt
 import toml
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
+from astropy.coordinates import EarthLocation
 
 from .. import LOGGER
 from ..miscellaneous import error_handling as errh
@@ -50,6 +52,7 @@ def check_config_validity(config_dict: dict):
         If any images specified in the sky_models configuration section do not
         exist
     """
+
     @dataclass
     class Param:
         """Class to handle a single configuration parameter"""
@@ -151,17 +154,21 @@ def check_config_validity(config_dict: dict):
 
     if config_dict['sky_models']['Galactic']['LargeScale']['include']:
         if not config_dict['sky_models']['Galactic']['LargeScale']['create']:
-            must_exist_files.append(config_dict['sky_models']['Galactic']['LargeScale']['image'])
+            must_exist_files.append(
+                config_dict['sky_models']['Galactic']['LargeScale']['image'])
 
     if config_dict['sky_models']['Galactic']['SmallScale']['include']:
         if not config_dict['sky_models']['Galactic']['SmallScale']['create']:
-            must_exist_files.append(config_dict['sky_models']['Galactic']['SmallScale']['image'])
+            must_exist_files.append(
+                config_dict['sky_models']['Galactic']['SmallScale']['image'])
 
     if config_dict['sky_models']['EG']['Known']['include']:
-        must_exist_files.append(config_dict['sky_models']['EG']['Known']['image'])
+        must_exist_files.append(
+            config_dict['sky_models']['EG']['Known']['image'])
 
     if config_dict['sky_models']['EG']['Known']['include']:
-        must_exist_files.append(config_dict['sky_models']['EG']['Known']['image'])
+        must_exist_files.append(
+            config_dict['sky_models']['EG']['Known']['image'])
 
     for file in must_exist_files:
         if not Path(file).exists() and file != "":
@@ -187,11 +194,46 @@ def load_configuration(toml_file: Union[Path, str]) -> dict:
 
 @dataclass
 class Observation:
-    time: Time  # start time of observation
+    t_start: Time  # start time of observation
     t_total: int  # s
     n_scan: int  # s
     min_gap_scan: int  # s
-    min_elevation: int
+    min_elevation: int  # deg
+
+    def scan_times(self, coord0: SkyCoord,
+                   location: EarthLocation,
+                   partial_scans_allowed: bool = False) -> Tuple[
+        Tuple[Time, Time], ...]:
+        """
+        Calculates scan_times for the Observation for a particular pointing
+        centre, from a specific location
+
+        Parameters
+        ----------
+        coord0
+            Celestial coordinate to observe
+        location
+            Earth location from which to observe
+        partial_scans_allowed
+            Whether to allow scans to be broken across minimum elevation
+            boundaries. Default is False
+
+        Returns
+        -------
+        Tuple containing two-tuples of (astropy.time.Time, astropy.time.Time)
+        representing scan start/end times
+        """
+        from ..physics import astronomy as ast
+
+        # Compute scan times
+        scans = ast.scan_times(
+            self.t_start, coord0,
+            location, self.n_scan,
+            self.t_total, self.min_elevation,
+            self.min_gap_scan, partial_scans_allowed=partial_scans_allowed
+        )
+
+        return tuple(scans)
 
 
 @dataclass
@@ -338,6 +380,8 @@ class Calibration:
 class Station:
     station_model: Path
     position: Tuple[float, float, float]
+    ants: Dict = field(init=False)
+    n_ant: int = field(init=False)
 
     def __post_init__(self):
         ants_position_file = self.station_model / 'layout.txt'
@@ -352,11 +396,18 @@ class Station:
 
 @dataclass
 class Telescope:
+    """Class containing all information related to an interferometer"""
     model: Path
+    ref_ant: Optional[int] = field(default=None)
+    lon: float = field(init=False)
+    lat: float = field(init=False)
+    stations: Dict[int, Station] = field(init=False)
+    n_stations: int = field(init=False)
+    location: EarthLocation = field(init=False)
+    centre: npt.NDArray[float] = field(init=False)
+    _baseline_lengths: Union[None, Dict[Tuple[int, int], float]] = field(init=0)
 
     def __post_init__(self):
-        from astropy.coordinates import EarthLocation
-
         self.lon, self.lat = np.loadtxt(self.model / 'position.txt')
 
         station_position_file = self.model / 'layout.txt'
@@ -371,22 +422,73 @@ class Telescope:
         self.stations = {}
         for s in stations:
             number = int(s.name.strip('station'))
-            station_position = xs[number], ys[number], zs[number]
+            station_position = np.array([xs[number], ys[number], zs[number]])
             self.stations[number] = Station(stations[number], station_position)
 
         self.n_stations = len(self.stations)
         self.location = EarthLocation(lat=self.lat * u.deg,
                                       lon=self.lon * u.deg)
+        self.centre = np.mean([v.position for k, v in self.stations.items()],
+                              axis=0)
+
+        # If no reference antenna is given, assign the central-most antenna in
+        # the array as the reference antenna
+        if self.ref_ant is None:
+            station_dists = {}
+            for k, s in self.stations.items():
+                station_dists[k] = self.dist_to_centre(s.position)
+
+            min_dist = 1e30
+            for k, v in station_dists.items():
+                if v < min_dist:
+                    min_dist = v
+                    self.ref_ant = k
+
+        self._baseline_lengths = None
+
+    @property
+    def baseline_lengths(self) -> Dict[Tuple[int, int], float]:
+        """
+        Baseline lengths of all as a dict whose keys are 2-tuples of each
+        baseline's antennae numbers and values are separations between those
+        two antennae
+        """
+        if self._baseline_lengths is None:
+            from itertools import combinations
+
+            ant_pairs = combinations(self.stations.keys(), 2)
+            self._baseline_lengths = {}
+            for ant_pair in ant_pairs:
+                positions = [self.stations[_].position for _ in ant_pair]
+                baseline_length = self._dist_between_points(*positions)
+                self._baseline_lengths[ant_pair] = baseline_length
+
+        return self._baseline_lengths
+
+    @staticmethod
+    def _dist_between_points(pos1: npt.NDArray[float],
+                             pos2: npt.NDArray[float]) -> float:
+        """Dist [m] between two points"""
+        return np.sqrt(np.sum((pos2 - pos1) ** 2.))
+
+    def dist_to_centre(self, pos: npt.NDArray[float]) -> float:
+        """Dist [m] to the array's geometrical centre"""
+        return self._dist_between_points(pos, self.centre)
+
+    def dist_to_refant(self, pos: npt.NDArray[float]) -> float:
+        """Distance of a position to the reference antenna"""
+        ref_station = self.stations[self.ref_ant]
+        return self._dist_between_points(pos, ref_station.position)
 
 
-@dataclass
-class SkyComponentConfiguration:
-    create: bool
-    image: Union[str, Path]
-    flux_range: Tuple[float, float] = (0.0, 1e30)
-    flux_inner: Union[None, float] = None
-    flux_outer: Union[None, float] = None
-    demix_error: Union[None, float] = None
+# @dataclass
+# class SkyComponentConfiguration:
+#     create: bool
+#     image: Union[str, Path]
+#     flux_range: Tuple[float, float] = (0.0, 1e30)
+#     flux_inner: Union[None, float] = None
+#     flux_outer: Union[None, float] = None
+#     demix_error: Union[None, float] = None
 
 @dataclass
 class SkyComponentConfiguration:
@@ -397,9 +499,11 @@ class SkyComponentConfiguration:
         if isinstance(self.image, str) and self.image != "":
             self.image = Path(self.image)
 
+
 @dataclass
 class EoR21cmConfiguration(SkyComponentConfiguration):
     create: bool
+
 
 @dataclass
 class ATeamConfiguration(SkyComponentConfiguration):
@@ -413,14 +517,17 @@ class ExtragalacticComponentConfiguration(SkyComponentConfiguration):
     flux_outer: float
     flux_transition: float
 
+
 @dataclass
 class ExtragalacticConfiguration(SkyComponentConfiguration):
     real_component: Union[ExtragalacticComponentConfiguration, None]
     artifical_component: Union[ExtragalacticComponentConfiguration, None]
 
+
 @dataclass
 class GalacticComponentConfiguration(SkyComponentConfiguration):
     create: bool
+
 
 @dataclass
 class GalacticConfiguration(SkyComponentConfiguration):
@@ -428,14 +535,14 @@ class GalacticConfiguration(SkyComponentConfiguration):
     small_scale_component: Union[GalacticComponentConfiguration, None]
 
 
-@dataclass
-class SkyModelConfiguration:
-    h21cm: Union[bool, SkyComponentConfiguration]
-    ateam: Union[bool, SkyComponentConfiguration]
-    gdsm: Union[bool, SkyComponentConfiguration]
-    gssm: Union[bool, SkyComponentConfiguration]
-    extragal_known: Union[bool, SkyComponentConfiguration]
-    extragal_trecs: Union[bool, SkyComponentConfiguration]
+# @dataclass
+# class SkyModelConfiguration:
+#     h21cm: Union[bool, SkyComponentConfiguration]
+#     ateam: Union[bool, SkyComponentConfiguration]
+#     gdsm: Union[bool, SkyComponentConfiguration]
+#     gssm: Union[bool, SkyComponentConfiguration]
+#     extragal_known: Union[bool, SkyComponentConfiguration]
+#     extragal_trecs: Union[bool, SkyComponentConfiguration]
 
 
 @dataclass
@@ -487,16 +594,20 @@ class FarmConfiguration:
                                      cfg_correlator["freq_max"],
                                      cfg_correlator["nchan"],
                                      cfg_correlator["chanwidth"],
-                                     cfg_correlator["t_int"],)
+                                     cfg_correlator["t_int"], )
 
         # Calibration setup
         noise, tec, gains, dd_effects = False, False, False, False
         cfg_calibration = self.cfg["calibration"]
 
+        if not self.output_dcy.exists():
+            self.output_dcy.mkdir(exist_ok=True)
+
         if cfg_calibration["noise"]["include"]:
             noise = Noise(
                 seed=cfg_calibration["noise"]["seed"],
-                sefd_freq_file=cfg_calibration["noise"]["sefd_frequencies_file"],
+                sefd_freq_file=cfg_calibration["noise"][
+                    "sefd_frequencies_file"],
                 sefd_file=cfg_calibration["noise"]["sefd_file"]
             )
             noise.create_sefd_rms_file(
@@ -513,7 +624,7 @@ class FarmConfiguration:
 
         if cfg_calibration["gains"]["include"]:
             gains = Gains(amp_err=cfg_calibration["gains"]["amp_err"],
-                          phase_err=cfg_calibration["gains"]["phase_err"],)
+                          phase_err=cfg_calibration["gains"]["phase_err"], )
 
         if cfg_calibration["DD-effects"]['include']:
             dd_effects = DDEffects()
@@ -696,8 +807,9 @@ class FarmConfiguration:
                                        self.telescope.model)
             set_oskar_sim_beam_pattern(f, "telescope/pol_mode",
                                        "Scalar")
+            # 1.02 factor here ensures no nasty edge effects
             set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/fov_deg",
-                                       self.field.fov[0])
+                                       self.field.fov[0] * 1.02)
             set_oskar_sim_beam_pattern(f, "beam_pattern/beam_image/size",
                                        self.field.nx)
             set_oskar_sim_beam_pattern(
