@@ -30,6 +30,7 @@ except ModuleNotFoundError:
             from logging import FileHandler
 
             self.name = name
+            self._kwargs = {}
 
             # Find FARM log file if it exists
             self.logfile = None
@@ -39,6 +40,33 @@ except ModuleNotFoundError:
             if any(is_file_handler):
                 file_handler = handlers[is_file_handler.index(True)]
                 self.logfile = Path(file_handler.baseFilename)
+
+        @property
+        def kwargs(self):
+            """Keyword arguments to run CASA task with"""
+            return self._kwargs
+
+        @kwargs.setter
+        def kwargs(self, new_kwargs):
+            def replace_items(obj):
+                """Recursively replace all pathlib.Path instances with str"""
+                if isinstance(obj, pathlib.Path):
+                    return str(obj)
+
+                if isinstance(obj, list):
+                    return [replace_items(x) for x in obj]
+
+                if isinstance(obj, tuple):
+                    return tuple(replace_items(x) for x in obj)
+
+                if isinstance(obj, dict):
+                    return {k: replace_items(x) for k, x in obj.items()}
+
+            # Replace all pathlib.Path instances with str because when repr is
+            # called on a pathlib.Path instance, 'PosixPath('my/dcy')' is
+            # returned which fails on a casa task execution
+            new_kwargs = replace_items(new_kwargs)
+            self._kwargs = new_kwargs
 
         @property
         def _command(self):
