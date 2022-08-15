@@ -258,9 +258,8 @@ def write_mir_bandpass_table(mirfile: pathlib.Path, bheader: ByteString,
                 f.write(pack('>d', btimes[i]))
 
 
-def write_mir_freqs_table(mirfile: pathlib.Path, nchan: int,
-                          fheader: ByteString,
-                          freq0: float, chan_width: float):
+def write_mir_freqs_table(mirfile: pathlib.Path, fheader: ByteString,
+                          nchan: int, freq0: float, chan_width: float):
     from struct import pack
 
     with open(mirfile / 'freqs', 'wb') as f:
@@ -297,9 +296,10 @@ def implement_bandpass_errors(vis_file: pathlib.Path, nchan: int,
                       dtype='float32')
     gvals = rng.normal(loc=1., scale=gnoise, size=bgains[:, :, :, 0].shape)
     pvals = rng.normal(loc=0., scale=pnoise, size=bgains[:, :, :, 1].shape)
-    cvals = (np.cos(pvals) + 1j * np.sin(pvals)) * gvals
+    cvals: npt.NDArray = (np.cos(pvals) + 1j * np.sin(pvals)) * gvals
     rvals = cvals.real.astype('float32')
     ivals = cvals.imag.astype('float32')
+
     my_bgains = np.stack((rvals, ivals), axis=3)
     write_mir_bandpass_table(vis_file, gheader, gtimes, my_bgains)
     write_mir_freqs_table(vis_file, gheader, nchan, freq0, chan_width)
