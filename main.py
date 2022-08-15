@@ -944,7 +944,7 @@ if not model_only:
         miriad.fits(op='xyin', _in=sky_model_pbcor, out=sky_model_pbcor_mirim)
         miriad.uvmodel(vis=temp_scan_out_mirvis, model=sky_model_pbcor_mirim,
                        options="add,zero", out=scan_out_mirvis)
-        temp_scan_out_mirvis.unlink()
+        shutil.rmtree(temp_scan_out_mirvis)
 
         miriad.puthd(_in=f"{scan_out_mirvis}/restfreq", value=1.42040575)
         miriad.puthd(_in=f"{scan_out_mirvis}/telescop", value="SKA1-LOW")
