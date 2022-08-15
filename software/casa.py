@@ -8,8 +8,8 @@ except ModuleNotFoundError:
     import pathlib
     from typing import Union, Optional
 
-    from farm import LOGGER
-    from farm.software.common import which
+    from .. import LOGGER
+    from .common import which
 
     _CASA_PATH = which('casa')
 
@@ -24,7 +24,7 @@ except ModuleNotFoundError:
             self.__dict__.update(kwargs)
 
 
-    class _CasaTask:
+    class CasaTask:
         def __init__(self, name: str):
             from pathlib import Path
             from logging import FileHandler
@@ -62,11 +62,12 @@ except ModuleNotFoundError:
                 if isinstance(obj, dict):
                     return {k: replace_items(x) for k, x in obj.items()}
 
+                return obj
+
             # Replace all pathlib.Path instances with str because when repr is
             # called on a pathlib.Path instance, 'PosixPath('my/dcy')' is
             # returned which fails on a casa task execution
-            new_kwargs = replace_items(new_kwargs)
-            self._kwargs = new_kwargs
+            self._kwargs = replace_items(new_kwargs)
 
         @property
         def _command(self):
@@ -76,6 +77,7 @@ except ModuleNotFoundError:
                    ')'
 
         def __call__(self, **kwargs):
+            print(type(kwargs), kwargs)
             self.kwargs = kwargs
 
             cmd = (f"{_CASA_PATH} --nogui --norc --agg --notelemetry "
@@ -118,8 +120,8 @@ except ModuleNotFoundError:
     tools = _Namespace()
     tasks = _Namespace()
 
-    tasks.add_member(tclean=_CasaTask('tclean'),
-                     exportuvfits=_CasaTask('exportuvfits'),
-                     importuvfits=_CasaTask('importuvfits'),
-                     vishead=_CasaTask('vishead'),
-                     concat=_CasaTask('concat'),)
+    tasks.add_member(tclean=CasaTask('tclean'),
+                     exportuvfits=CasaTask('exportuvfits'),
+                     importuvfits=CasaTask('importuvfits'),
+                     vishead=CasaTask('vishead'),
+                     concat=CasaTask('concat'), )

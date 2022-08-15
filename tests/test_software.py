@@ -1,8 +1,35 @@
 import contextlib
 import io
+import pathlib
 import unittest
 from farm.software import wsclean, which
+from farm.software.casa import tasks
 from farm.software.wsclean import _WSCLEAN_DEFAULT_ARGS, Option
+
+
+class TestCasa(unittest.TestCase):
+    def test_tasks(self):
+        kwargs = {"vis": f"/my/new/dcy", "mode": "put", "hdkey": "telescope",
+                  "hdvalue": "SKA1-LOW"}
+        vishead = tasks.vishead
+        vishead.kwargs = kwargs
+
+        cmd = "vishead(vis='/my/new/dcy', mode='put', hdkey='telescope', " \
+              "hdvalue='SKA1-LOW')"
+        self.assertEqual(cmd, vishead._command)
+
+        kwargs["vis"] = pathlib.Path(kwargs["vis"])
+        vishead.kwargs = kwargs
+        self.assertEqual(cmd, vishead._command)
+
+        kwargs["vis"] = [[kwargs["vis"], kwargs["vis"]],
+                         [kwargs["vis"], kwargs["vis"]]]
+        vishead.kwargs = kwargs
+        cmd = "vishead(vis=[" \
+              "['/my/new/dcy', '/my/new/dcy'], " \
+              "['/my/new/dcy', '/my/new/dcy']], " \
+              "mode='put', hdkey='telescope', hdvalue='SKA1-LOW')"
+        self.assertEqual(cmd, vishead._command)
 
 
 class TestWsclean(unittest.TestCase):
