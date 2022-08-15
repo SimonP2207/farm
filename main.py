@@ -418,6 +418,7 @@ if len(sys.argv) != 1:
     args = parser.parse_args()
     config_file = pathlib.Path(args.config_file)
     model_only = args.model_only
+    dryrun = args.dry_run
     log_level = logging.DEBUG if args.debug else logging.INFO
 else:
     config_file = pathlib.Path(farm.data.FILES['EXAMPLE_CONFIG'])
