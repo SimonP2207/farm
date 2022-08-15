@@ -198,6 +198,7 @@ def implement_gain_errors(vis_file: pathlib.Path, t_interval: float,
     if not (vis_file / 'gains').exists():
         # First run gperror to make a gain table with some nominal values
         # (since random number seed can not be passed)
+        LOGGER.info(f"Creating gains table in {vis_file}")
         miriad.gperror(vis=vis_file, interval=t_interval,
                        pnoise=pnoise, gnoise=gnoise)
 
@@ -915,6 +916,7 @@ if not model_only:
         sky_model_pbcor = cfg.output_dcy / sky_model_pbcor
         pb_multiply(in_image=sky_model_mir_im, pb=scan_beam_fits,
                     out_fitsfile=sky_model_pbcor, cellscal='1/F')
+        sky_model_pbcor_mirim = sky_model_pbcor.with_suffix('.mirim')
 
         scan_out_ms: pathlib.Path = cfg.root_name.append(f'_ICUT_{n_scan_str}.ms')
         scan_out_uvfits = scan_out_ms.with_suffix('.uvfits')
@@ -939,7 +941,8 @@ if not model_only:
         scan_out_uvfits.unlink()
 
         # Add sky model to visibility data
-        miriad.uvmodel(vis=temp_scan_out_mirvis, model=sky_model_pbcor,
+        miriad.fits(op='xyin', _in=sky_model_pbcor, out=sky_model_pbcor_mirim)
+        miriad.uvmodel(vis=temp_scan_out_mirvis, model=sky_model_pbcor_mirim,
                        options="add,zero", out=scan_out_mirvis)
         temp_scan_out_mirvis.unlink()
 
