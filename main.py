@@ -301,8 +301,8 @@ def implement_bandpass_errors(vis_file: pathlib.Path, nchan: int,
     rvals = cvals.real.astype('float32')
     ivals = cvals.imag.astype('float32')
     my_bgains = np.stack((rvals, ivals), axis=3)
-    write_mir_bandpass_table(out_uvcut, gheader, gtimes, my_bgains)
-    write_mir_freqs_table(out_uvcut, gheader, nchan, freq0, chan_width)
+    write_mir_bandpass_table(vis_file, gheader, gtimes, my_bgains)
+    write_mir_freqs_table(vis_file, gheader, nchan, freq0, chan_width)
 
     miriad.puthd(_in=f'{str(vis_file)}/nbpsols', value=len(gtimes))
     miriad.puthd(_in=f'{str(vis_file)}/nspect0', value=1.)
