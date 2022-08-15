@@ -3,12 +3,24 @@ farm.miscellaneous subpackage contains methods not logically belonging to the
 other farm subpackages, or not suited to placement in farm's main directory
 """
 from typing import Union
+from datetime import timedelta
 import numpy as np
 import numpy.typing as npt
 from . import decorators, error_handling, fits, image_functions, plotting, file_handling
 
 __all__ = ['decorators', 'error_handling', 'fits', 'image_functions',
            'plotting', 'file_handling']
+
+
+def timedelta_to_ddhhmmss(td: timedelta):
+    """timedelta instance to string of format DDd:HHh:MMm:SSs"""
+    secs = td.total_seconds()
+    dd = secs // (60 * 60 * 24)
+    hh = secs // (60 * 60) - dd * 24
+    mm = secs // 60 - hh * 60 - dd * 60 * 24
+    ss = secs % (dd * 60 * 60 * 24 + hh * 60 * 60 + mm * 60)
+
+    return f"{dd:02.0f}d {hh:02.0f}h {mm:02.0f}m {ss:02.0f}s"
 
 
 def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:

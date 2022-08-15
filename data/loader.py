@@ -21,10 +21,27 @@ from ..miscellaneous import error_handling as errh
 from ..miscellaneous import decorators
 
 
-def check_file_exists(filename: Path) -> bool:
-    if not filename.exists():
-        return False
-    return True
+# TODO: Write check_tec_image_compatibility method
+def check_tec_image_compatibility(farm_cfg: 'FarmConfiguration',
+                                  tec_images: List[Path]
+                                  ) -> Tuple[bool, str]:
+    """
+    Checks whether a list of TEC fits files is compatible with the observation
+    specified within a FarmConfiguration instance
+
+    Parameters
+    ----------
+    farm_cfg
+        FarmConfiguration instance to parse information from
+    tec_images
+        List of paths to TEC-screen fits-files
+
+    Returns
+    -------
+    Tuple of (bool, str) whereby the bool indicates compatibility and the str is
+    contains the reason for incompatibility if False (empty string if True)
+    """
+    return True, ""
 
 
 def check_config_validity(config_dict: dict):
@@ -180,7 +197,7 @@ def load_configuration(toml_file: Union[Path, str]) -> dict:
     if not isinstance(toml_file, Path):
         toml_file = Path(toml_file)
 
-    if not check_file_exists(toml_file):
+    if not toml_file.exists():
         errh.raise_error(FileNotFoundError,
                          f"{str(toml_file.resolve())} doesn't exist")
 

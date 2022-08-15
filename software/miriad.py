@@ -11,10 +11,13 @@ import subprocess
 import sys
 import warnings
 import pathlib
-from typing import Optional
+from typing import ByteString, Tuple
+import numpy as np
+from numpy import typing as npt
 
+from .. import LOGGER
 from . import common as sfuncs
-from ..miscellaneous import error_handling as errh, decorators, generate_random_chars
+from ..miscellaneous import error_handling as errh, decorators
 
 MIR_CHAR_LIMIT = 64
 LONG_KEYS = ('tin', 'out', 'vis', 'model')
@@ -58,6 +61,9 @@ def mir_func(f, thefilter):
         # character limit is not exceeded
         original_args = to_args(kw)
         reformat_args = False
+
+        # puthd indicates whether the vis/in parameter value takes extra
+        # characters on the end of its path e.g. /my/data/image.im/crval1
         puthd = True if str(f) in ('puthd', 'gethd', 'delhd') else False
         for k, v in kw.items():
             if isinstance(v, pathlib.Path):
@@ -280,6 +286,280 @@ class Miriad(object):
             stdout = p.communicate()[0].decode('latin1')
 
         return stdout
+
+    @staticmethod
+    def is_miriad_vis_file(filename: pathlib.Path) -> bool:
+        """
+        Determine if a file is a miriad visibility data file or not
+
+        Parameters
+        ----------
+        filename : pathlib.Path
+            Path to prospective miriad visibility file
+
+        Returns
+        -------
+        bool
+            Whether filename is a miriad visibility file (True)
+            or not (False)
+        """
+        if not filename.is_dir():
+            return False
+
+        req_contents = ['flags', 'header', 'history', 'vartable', 'visdata']
+        contents = list(filename.iterdir())
+
+        return all([filename / f in contents for f in req_contents])
+
+    @staticmethod
+    def write_mir_gains_table(mirfile: pathlib.Path, gheader: ByteString,
+                              gtimes: npt.NDArray, ggains: npt.NDArray):
+        """
+        Write a set of gains to the gains table of a miriad visibility
+        data file
+
+        Parameters
+        ----------
+        mirfile : pathlib.Path
+            Full path to miriad visibility data file
+        gheader : ByteString
+            Gains header
+        gtimes : npt.NDArray
+            Array of times corresponding to each gains interval
+        ggains : npt.NDArray
+            Array of gains of shape (number of antennae, 2)
+
+        Returns
+        -------
+        None
+        """
+        from struct import pack
+
+        n = len(gtimes)
+        ngains = ggains.shape[1]
+        with open(mirfile / 'gains', 'wb') as f:
+            f.write(gheader)
+            for i in range(n):
+                f.write(pack('>d', gtimes[i]))
+                f.write(pack(f'>{ngains * 2:.0f}f',
+                             *ggains[i, :, :].flatten().tolist()))
+
+    @classmethod
+    def read_mir_gains_table(cls, mirfile: pathlib.Path) -> Tuple[
+        ByteString, npt.NDArray, npt.NDArray]:
+        """
+        Read the gains table from a miriad visibility data file and return
+        its header, times and gains
+
+        Parameters
+        ----------
+        mirfile : pathlib.Path
+            Full path to miriad visibility data file
+
+        Returns
+        -------
+        Tuple[ByteString, npt.NDArray, npt.NDArray]
+            Tuple of gains header, times and gain values. The latter is of
+            shape (number of antennae, 2)
+
+        Raises
+        ------
+        ValueError
+            If mirfile is not a miriad visibility data file, or it is but
+            does not contain a gains table
+        """
+        from struct import unpack
+
+        if not cls.is_miriad_vis_file(mirfile):
+            err_msg = f'{mirfile} is not miriad visibility data'
+            errh.raise_error(ValueError, err_msg)
+
+        if not (mirfile / 'gains').exists():
+            err_msg = f'{mirfile} does not contain a gains table'
+            errh.raise_error(ValueError, err_msg)
+
+        # read header items we need
+        ngains, nfeed, ntau, nsols = 0, 0, 0, 0
+        items = [b'ngains', b'nfeeds', b'ntau', b'nsols']
+
+        # Parse necessary information from the header
+        with open(mirfile / 'header', 'rb') as f:
+            line = f.read(16)
+            while line:
+                ln = unpack('!16B', line)[15]
+                # round up to multiple of 16
+                ln = 16 * ((ln + 15) // 16)
+                item = unpack('!15s', line[0:15])[0].split(b'\0')[0]
+                data = f.read(ln)
+
+                if item in items:
+                    val = unpack('!i', data[4:8])[0]
+                    if item == b'nfeeds':
+                        nfeeds = val
+                    if item == b'ngains':
+                        ngains = val
+                    if item == b'ntau':
+                        ntau = val
+                    if item == b'nsols':
+                        nsols = val
+                line = f.read(16)
+
+        n = max(1, nsols)
+        with open(mirfile / 'gains', 'rb') as f:
+            gtimes = np.zeros(n)
+            ggains = np.zeros((n, ngains, 2), dtype=np.float32)
+            gheader = f.read(8)
+            for i in range(n):
+                buf = f.read(8)
+                time = unpack('>d', buf)
+                gtimes[i] = time[0]
+                buf = f.read(ngains * 8)
+                g = unpack(f'>{ngains * 2:.0f}f', buf)
+                ggains[i, :, :] = np.array(g).reshape(ngains, 2)
+
+        return gheader, gtimes, ggains
+
+    @classmethod
+    def implement_gain_errors(cls, vis_file: pathlib.Path, t_interval: float,
+                              pnoise: float, gnoise: float, rseed: int):
+        """
+        Introduce gains errors in to a miriad visibility data file
+
+        Parameters
+        ----------
+        vis_file : pathlib.Path
+            Full path to miriad visibility data file
+        t_interval : float
+            Interval between gain solutions [minutes]
+        pnoise : float
+            Phase error [deg]
+        gnoise : float
+            Amplitude error [percentage]
+        rseed : int
+            Random number generator seed
+        """
+        from numpy.random import default_rng
+
+        if t_interval <= 60.:
+            err_msg = "t_interval must be longer than 1h or get BP problem"
+            errh.raise_error(ValueError, err_msg)
+
+        if not cls.is_miriad_vis_file(vis_file):
+            err_msg = f'{vis_file} is not miriad visibility data'
+            errh.raise_error(ValueError, err_msg)
+
+        if not (vis_file / 'gains').exists():
+            # First run gperror to make a gain table with some nominal values
+            # (since random number seed can not be passed)
+            LOGGER.info(f"Creating gains table in {vis_file}")
+            miriad.gperror(vis=vis_file, interval=t_interval,
+                           pnoise=pnoise, gnoise=gnoise)
+
+        # Now read the gain table and replace with some nice random numbers
+        gheader, gtimes, ggains = cls.read_mir_gains_table(vis_file)
+
+        phas_rms = pnoise * np.pi / 180.
+        gain_rms = gnoise / 100.
+        rng = default_rng(seed=rseed)
+        gvals = rng.normal(loc=1., scale=gain_rms,
+                           size=ggains[:, :, 0].shape)
+        pvals = rng.normal(loc=0., scale=phas_rms,
+                           size=ggains[:, :, 1].shape)
+        cvals = (np.cos(pvals) + 1j * np.sin(pvals)) * gvals
+        rvals = cvals.real.astype('float32')
+        ivals = cvals.imag.astype('float32')
+        my_ggains = np.stack((rvals, ivals), axis=2)
+        cls.write_mir_gains_table(vis_file, gheader, gtimes, my_ggains)
+
+    @staticmethod
+    def write_mir_bandpass_table(mirfile: pathlib.Path, bheader: ByteString,
+                                 btimes: npt.NDArray, bgains: npt.NDArray):
+        """
+        Write a set of gains to the bandpass table of a miriad visibility
+        data file
+
+        Parameters
+        ----------
+        mirfile : pathlib.Path
+            Full path to miriad visibility data file
+        bheader : ByteString
+            Gains header
+        btimes : npt.NDArray
+            Array of times corresponding to bandpass solution interval
+        bgains : npt.NDArray
+            Array of bandpass solutions of shape (number of antennae,
+            number of antennae, number of channels, 2)
+
+        Returns
+        -------
+        None
+        """
+        from struct import pack
+
+        n = len(btimes)
+        nbpsols = n
+        if n == 1 and btimes[0] == 0:
+            nbpsols = 0
+
+        ngains, nchan = bgains.shape[1:3]
+        with open(mirfile / 'bandpass', 'wb') as f:
+            f.write(bheader)
+            for i in range(n):
+                f.write(pack(f'>{ngains * nchan * 2:.0f}f',
+                             *bgains[i, :, :, :].flatten().tolist()))
+                if nbpsols > 0:
+                    f.write(pack('>d', btimes[i]))
+
+    @staticmethod
+    def write_mir_freqs_table(mirfile: pathlib.Path, fheader: ByteString,
+                              nchan: int, freq0: float, chan_width: float):
+        from struct import pack
+
+        with open(mirfile / 'freqs', 'wb') as f:
+            f.write(fheader)
+            f.write(pack('>iidd', nchan, 0, freq0 / 1e9, chan_width / 1e9))
+
+    @classmethod
+    def implement_bandpass_errors(cls, vis_file: pathlib.Path, nchan: int,
+                                  freq0: float, chan_width: float,
+                                  pnoise: float, gnoise: float, rseed: int):
+        """
+        Introduce bandpass errors in to a miriad visibility data file
+
+        Parameters
+        ----------
+        vis_file : pathlib.Path
+            Full path to miriad visibility data file
+        nchan : int
+            Number of channels in data file
+        pnoise : float
+            Phase error [deg]
+        gnoise : float
+            Amplitude error [percentage]
+        rseed : int
+            Random number generator seed
+        """
+        from numpy.random import default_rng
+
+        rng = default_rng(seed=rseed)
+
+        gheader, gtimes, ggains = cls.read_mir_gains_table(vis_file)
+
+        bgains = np.zeros((ggains.shape[0], ggains.shape[1], nchan, 2),
+                          dtype='float32')
+        gvals = rng.normal(loc=1., scale=gnoise, size=bgains[:, :, :, 0].shape)
+        pvals = rng.normal(loc=0., scale=pnoise, size=bgains[:, :, :, 1].shape)
+        cvals: npt.NDArray = (np.cos(pvals) + 1j * np.sin(pvals)) * gvals
+        rvals = cvals.real.astype('float32')
+        ivals = cvals.imag.astype('float32')
+
+        my_bgains = np.stack((rvals, ivals), axis=3)
+        Miriad.write_mir_bandpass_table(vis_file, gheader, gtimes, my_bgains)
+        cls.write_mir_freqs_table(vis_file, gheader, nchan, freq0, chan_width)
+
+        miriad.puthd(_in=f'{str(vis_file)}/nbpsols', value=len(gtimes))
+        miriad.puthd(_in=f'{str(vis_file)}/nspect0', value=1.)
+        miriad.puthd(_in=f'{str(vis_file)}/nchan0', value=nchan)
 
 
 miriad = Miriad()

@@ -2,16 +2,13 @@
 import os
 import shutil
 import sys
-import subprocess
 import logging
 import argparse
 import pathlib
-from typing import ByteString, Union, Tuple, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 from astropy.io import fits
-from astropy.time import Time
 
 import farm
 import farm.data.loader as loader
@@ -19,383 +16,14 @@ import farm.physics.astronomy as ast
 import farm.miscellaneous as misc
 from farm.miscellaneous import generate_random_chars as grc
 import farm.miscellaneous.error_handling as errh
-from farm.miscellaneous.image_functions import regrid_fits, pb_multiply
+from farm.miscellaneous.image_functions import pb_multiply
 import farm.miscellaneous.plotting as plotting
 from farm.observing import Scan, Observation
 import farm.sky_model.tb_functions as tb_funcs
 from farm.software import casa
 from farm.software.miriad import miriad
 from farm.software import oskar
-from farm.software.oskar import (run_oskar_sim_beam_pattern,
-                                 run_oskar_sim_interferometer)
 from farm import LOGGER
-
-from dataclasses import dataclass, field
-from collections.abc import Iterable
-import numpy.typing as npt
-
-
-def is_miriad_vis_file(filename: pathlib.Path) -> bool:
-    """
-    
-
-    Parameters
-    ----------
-    filename : pathlib.Path
-        Path to prospective miriad visibility file
-
-    Returns
-    -------
-    bool
-        Whether filename is a miriad visibility file (True) 
-        or not (False)
-    """
-    if not filename.is_dir():
-        return False
-
-    req_contents = ['flags', 'header', 'history', 'vartable', 'visdata']
-    contents = list(filename.iterdir())
-
-    return all([filename / f in contents for f in req_contents])
-
-
-def write_mir_gains_table(mirfile: pathlib.Path, gheader: ByteString,
-                          gtimes: npt.NDArray, ggains: npt.NDArray):
-    """
-    Write a set of gains to the gains table of a miriad visibility
-    data file
-
-    Parameters
-    ----------
-    mirfile : pathlib.Path
-        Full path to miriad visibility data file
-    gheader : ByteString
-        Gains header
-    gtimes : npt.NDArray
-        Array of times corresponding to each gains interval
-    ggains : npt.NDArray
-        Array of gains of shape (number of antennae, 2)
-
-    Returns
-    -------
-    None
-    """
-    from struct import pack
-
-    n = len(gtimes)
-    ngains = ggains.shape[1]
-    with open(mirfile / 'gains', 'wb') as f:
-        f.write(gheader)
-        for i in range(n):
-            f.write(pack('>d', gtimes[i]))
-            f.write(pack(f'>{ngains * 2:.0f}f',
-                         *ggains[i, :, :].flatten().tolist()))
-
-
-def read_mir_gains_table(mirfile: pathlib.Path) -> Tuple[
-    ByteString, npt.NDArray, npt.NDArray]:
-    """
-    Read the gains table from a miriad visibility data file and return
-    its header, times and gains
-
-    Parameters
-    ----------
-    mirfile : pathlib.Path
-        Full path to miriad visibility data file
-
-    Returns
-    -------
-    Tuple[ByteString, npt.NDArray, npt.NDArray]
-        Tuple of gains header, times and gain values. The latter is of
-        shape (number of antennae, 2)
-    
-    Raises
-    ------
-    ValueError
-        If mirfile is not a miriad visibility data file, or it is but 
-        does not contain a gains table
-    """
-    from struct import unpack
-
-    if not is_miriad_vis_file(mirfile):
-        err_msg = f'{mirfile} is not miriad visibility data'
-        errh.raise_error(ValueError, err_msg)
-
-    if not (mirfile / 'gains').exists():
-        err_msg = f'{mirfile} does not contain a gains table'
-        errh.raise_error(ValueError, err_msg)
-
-    # read header items we need
-    ngains, nfeed, ntau, nsols = 0, 0, 0, 0
-    items = [b'ngains', b'nfeeds', b'ntau', b'nsols']
-
-    # Parse necessary information from the header
-    with open(mirfile / 'header', 'rb') as f:
-        line = f.read(16)
-        while line:
-            ln = unpack('!16B', line)[15]
-            # round up to multiple of 16
-            ln = 16 * ((ln + 15) // 16)
-            item = unpack('!15s', line[0:15])[0].split(b'\0')[0]
-            data = f.read(ln)
-
-            if item in items:
-                val = unpack('!i', data[4:8])[0]
-                if item == b'nfeeds':
-                    nfeeds = val
-                if item == b'ngains':
-                    ngains = val
-                if item == b'ntau':
-                    ntau = val
-                if item == b'nsols':
-                    nsols = val
-            line = f.read(16)
-
-    n = max(1, nsols)
-    with open(mirfile / 'gains', 'rb') as f:
-        gtimes = np.zeros(n)
-        ggains = np.zeros((n, ngains, 2), dtype=np.float32)
-        gheader = f.read(8)
-        for i in range(n):
-            buf = f.read(8)
-            time = unpack('>d', buf)
-            gtimes[i] = time[0]
-            buf = f.read(ngains * 8)
-            g = unpack(f'>{ngains * 2:.0f}f', buf)
-            ggains[i, :, :] = np.array(g).reshape(ngains, 2)
-
-    return gheader, gtimes, ggains
-
-
-def implement_gain_errors(vis_file: pathlib.Path, t_interval: float,
-                          pnoise: float, gnoise: float, rseed: int):
-    """
-    Introduce gains errors in to a miriad visibility data file
-
-    Parameters
-    ----------
-    vis_file : pathlib.Path
-        Full path to miriad visibility data file
-    t_interval : float
-        Interval between gain solutions [minutes]
-    pnoise : float
-        Phase error [deg]
-    gnoise : float
-        Amplitude error [percentage]
-    rseed : int
-        Random number generator seed
-    """
-    from numpy.random import default_rng
-
-    if t_interval <= 60.:
-        err_msg = "t_interval must be longer than 1h or get BP problem"
-        errh.raise_error(ValueError, err_msg)
-
-    if not is_miriad_vis_file(vis_file):
-        err_msg = f'{vis_file} is not miriad visibility data'
-        errh.raise_error(ValueError, err_msg)
-
-    if not (vis_file / 'gains').exists():
-        # First run gperror to make a gain table with some nominal values
-        # (since random number seed can not be passed)
-        LOGGER.info(f"Creating gains table in {vis_file}")
-        miriad.gperror(vis=vis_file, interval=t_interval,
-                       pnoise=pnoise, gnoise=gnoise)
-
-    # Now read the gain table and replace with some nice random numbers
-    gheader, gtimes, ggains = read_mir_gains_table(vis_file)
-
-    phas_rms = pnoise * np.pi / 180.
-    gain_rms = gnoise / 100.
-    rng = default_rng(seed=rseed)
-    gvals = rng.normal(loc=1., scale=gain_rms,
-                       size=ggains[:, :, 0].shape)
-    pvals = rng.normal(loc=0., scale=phas_rms,
-                       size=ggains[:, :, 1].shape)
-    cvals = (np.cos(pvals) + 1j * np.sin(pvals)) * gvals
-    rvals = cvals.real.astype('float32')
-    ivals = cvals.imag.astype('float32')
-    my_ggains = np.stack((rvals, ivals), axis=2)
-    write_mir_gains_table(vis_file, gheader, gtimes, my_ggains)
-
-
-def write_mir_bandpass_table(mirfile: pathlib.Path, bheader: ByteString,
-                             btimes: npt.NDArray, bgains: npt.NDArray):
-    """
-    Write a set of gains to the bandpass table of a miriad visibility
-    data file
-
-    Parameters
-    ----------
-    mirfile : pathlib.Path
-        Full path to miriad visibility data file
-    bheader : ByteString
-        Gains header
-    btimes : npt.NDArray
-        Array of times corresponding to bandpass solution interval
-    bgains : npt.NDArray
-        Array of bandpass solutions of shape (number of antennae,
-        number of antennae, number of channels, 2)
-
-    Returns
-    -------
-    None
-    """
-    from struct import pack
-
-    n = len(btimes)
-    nbpsols = n
-    if n == 1 and btimes[0] == 0:
-        nbpsols = 0
-
-    ngains, nchan = bgains.shape[1:3]
-    with open(mirfile / 'bandpass', 'wb') as f:
-        f.write(bheader)
-        for i in range(n):
-            f.write(pack(f'>{ngains * nchan * 2:.0f}f',
-                         *bgains[i, :, :, :].flatten().tolist()))
-            if nbpsols > 0:
-                f.write(pack('>d', btimes[i]))
-
-
-def write_mir_freqs_table(mirfile: pathlib.Path, fheader: ByteString,
-                          nchan: int, freq0: float, chan_width: float):
-    from struct import pack
-
-    with open(mirfile / 'freqs', 'wb') as f:
-        f.write(fheader)
-        f.write(pack('>iidd', nchan, 0, freq0 / 1e9, chan_width / 1e9))
-
-
-def implement_bandpass_errors(vis_file: pathlib.Path, nchan: int,
-                              freq0: float, chan_width: float,
-                              pnoise: float, gnoise: float, rseed: int):
-    """
-    Introduce bandpass errors in to a miriad visibility data file
-
-    Parameters
-    ----------
-    vis_file : pathlib.Path
-        Full path to miriad visibility data file
-    nchan : int
-        Number of channels in data file
-    pnoise : float
-        Phase error [deg]
-    gnoise : float
-        Amplitude error [percentage]
-    rseed : int
-        Random number generator seed
-    """
-    from numpy.random import default_rng
-
-    rng = default_rng(seed=rseed)
-
-    gheader, gtimes, ggains = read_mir_gains_table(vis_file)
-
-    bgains = np.zeros((ggains.shape[0], ggains.shape[1], nchan, 2),
-                      dtype='float32')
-    gvals = rng.normal(loc=1., scale=gnoise, size=bgains[:, :, :, 0].shape)
-    pvals = rng.normal(loc=0., scale=pnoise, size=bgains[:, :, :, 1].shape)
-    cvals: npt.NDArray = (np.cos(pvals) + 1j * np.sin(pvals)) * gvals
-    rvals = cvals.real.astype('float32')
-    ivals = cvals.imag.astype('float32')
-
-    my_bgains = np.stack((rvals, ivals), axis=3)
-    write_mir_bandpass_table(vis_file, gheader, gtimes, my_bgains)
-    write_mir_freqs_table(vis_file, gheader, nchan, freq0, chan_width)
-
-    miriad.puthd(_in=f'{str(vis_file)}/nbpsols', value=len(gtimes))
-    miriad.puthd(_in=f'{str(vis_file)}/nspect0', value=1.)
-    miriad.puthd(_in=f'{str(vis_file)}/nchan0', value=nchan)
-
-
-def create_beam_pattern_fits(cfg, scan_num, time, dt, beam_fits):
-    beam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
-    beam_root = cfg.root_name.append(f"_scan{scan_num}")
-    beam_name = beam_root.append(beam_sfx)
-    beam_fname = beam_name.append('.fits')
-
-    # Create beam pattern as .fits cube using oskar's sim_beam_pattern task
-    LOGGER.info(f"Running oskar_sim_beam_pattern from {cfg.sbeam_ini}")
-    cfg.set_oskar_sim_beam_pattern("beam_pattern/root_path", beam_root)
-    cfg.set_oskar_sim_beam_pattern("observation/start_time_utc", time)
-    cfg.set_oskar_sim_beam_pattern("observation/length", dt)
-    run_oskar_sim_beam_pattern(cfg.sbeam_ini)
-
-    beam_hdu = fits.open(beam_fname)
-
-    LOGGER.info(f"Starting synthetic observations' scan #{scan_num}")
-    # TODO: End of 27APR22. Figure out sbmout etc below. I think we don't
-    #  need a lot of the files as each scan's beam has only one 'frame' in
-    #  time in the beam cube
-    bmout_hdu = fits.PrimaryHDU(beam_hdu[0].data[0, :, :, :])
-    bmout_hdu.header.set('CTYPE1', 'RA---SIN')
-    bmout_hdu.header.set('CTYPE2', 'DEC--SIN')
-    bmout_hdu.header.set('CTYPE3', 'FREQ    ')
-    bmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
-    bmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
-    bmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
-    bmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
-    bmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
-    bmout_hdu.header.set('CRPIX3', 1)
-    bmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
-    bmout_hdu.header.set('CDELT2', cfg.field.cdelt)
-    bmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
-    bmout_hdu.header.set('CUNIT1', 'deg     ')
-    bmout_hdu.header.set('CUNIT2', 'deg     ')
-    bmout_hdu.header.set('CUNIT3', 'Hz      ')
-    bmout_hdu.writeto(beam_fits, overwrite=True)
-
-
-def determine_visfile_type(visfile: Union[str, pathlib.Path]) -> str:
-    """
-    Determine the type of visbility data file. One of either
-    'uvfits', 'miriad', or 'ms' for uvfits format, miriad visibility
-    format, or measurement set, respectively
-    """
-    if isinstance(visfile, str):
-        visfile = pathlib.Path(visfile)
-
-    try:
-        fits.open(visfile)
-        return 'uvfits'
-    except IsADirectoryError:
-        pass
-    except OSError:
-        return ''
-
-    visfile_contents = os.listdir(visfile)
-
-    if 'visdata' in visfile_contents:
-        return 'miriad'
-
-    if 'ANTENNA' in visfile_contents:
-        return 'ms'
-
-    return ''
-
-
-# TODO: Write check_tec_image_compatibility method
-def check_tec_image_compatibility(farm_cfg: loader.FarmConfiguration,
-                                  tec_images: List[pathlib.Path]
-                                  ) -> Tuple[bool, str]:
-    """
-    Checks whether a list of TEC fits files is compatible with the observation
-    specified within a FarmConfiguration instance
-
-    Parameters
-    ----------
-    farm_cfg
-        FarmConfiguration instance to parse information from
-    tec_images
-        List of paths to TEC-screen fits-files
-
-    Returns
-    -------
-    Tuple of (bool, str) whereby the bool indicates compatibility and the str is
-    contains the reason for incompatibility if False (empty string if True)
-    """
-    return True, ""
 
 
 # ############################################################################ #
@@ -430,12 +58,12 @@ cfg = loader.FarmConfiguration(config_file)
 if len(sys.argv) != 1:
     os.chdir(cfg.output_dcy)
 
-
 # ############################################################################ #
 # ######################## Set up the logger ################################# #
 # ############################################################################ #
-now = datetime.now()
-logfile = cfg.output_dcy / f'farm{now.strftime("%Y%b%d_%H%M%S").upper()}.log'
+pipeline_start = datetime.now()
+logfile_name = f'farm{pipeline_start.strftime("%Y%b%d_%H%M%S").upper()}.log'
+logfile = cfg.output_dcy / logfile_name
 LOGGER.setLevel(logging.DEBUG)
 
 # Set up handler for writing log messages to log file
@@ -864,7 +492,7 @@ if not model_only:
             else:
                 LOGGER.info("DRYRUN: Skipping TEC screen creation")
         else:
-            tec_compatible = check_tec_image_compatibility(
+            tec_compatible = farm.data.loader.check_tec_image_compatibility(
                 cfg, cfg.calibration.tec.image
             )
             if not tec_compatible[0]:
@@ -956,17 +584,21 @@ if not model_only:
 
         # Implement gain and bandpass errors
         # TODO: t_interval hard-coded here
-        implement_gain_errors(scan_out_mirvis, t_interval=240.,
-                              pnoise=cfg.calibration.gains.phase_err,
-                              gnoise=cfg.calibration.gains.amp_err,
-                              rseed=observation.products[scan]['seed'])
+        miriad.implement_gain_errors(
+            scan_out_mirvis, t_interval=240.,
+            pnoise=cfg.calibration.gains.phase_err,
+            gnoise=cfg.calibration.gains.amp_err,
+            rseed=observation.products[scan]['seed']
+        )
 
-        implement_bandpass_errors(scan_out_mirvis, nchan=cfg.correlator.n_chan,
-                                  freq0=cfg.correlator.freq_min,
-                                  chan_width=cfg.correlator.chan_width,
-                                  pnoise=cfg.calibration.gains.phase_err,
-                                  gnoise=cfg.calibration.gains.amp_err,
-                                  rseed=observation.products[scan]['seed'])
+        miriad.implement_bandpass_errors(
+            scan_out_mirvis, nchan=cfg.correlator.n_chan,
+            freq0=cfg.correlator.freq_min,
+            chan_width=cfg.correlator.chan_width,
+            pnoise=cfg.calibration.gains.phase_err,
+            gnoise=cfg.calibration.gains.amp_err,
+            rseed=observation.products[scan]['seed']
+        )
 
         miriad.fits(op='uvout', _in=scan_out_mirvis, out=scan_out_uvfits)
         shutil.rmtree(scan_out_mirvis)
@@ -980,141 +612,13 @@ if not model_only:
     out_ms = cfg.root_name.append('.ms')
     observation.concat_scan_measurement_sets(out_ms)
 
-    # for icut, (t_start, t_end) in enumerate(scan_times):
-    #     rseed_icut = int(cfg.calibration.noise.seed +
-    #                      icut * (3 - 5 ** 0.5) * 180.)
-    #     duration = (t_end - t_start).to_value('s')
-    #
-    #     # Simulate the primary beam for this scan
-    #     sicut = format(icut, f'0{len(str(cfg.observation.n_scan)) + 1}')
-    #     scan_beam_fits = cfg.root_name.append(f'_ICUT_{sicut}.fits')
-    #     create_beam_pattern_fits(cfg, icut, t_start, duration, scan_beam_fits)
-    #     scan_beam_mirim = scan_beam_fits.with_suffix('.im')
-    #
-    #     # TODO: This is where we left off. Correct below to be farm-compatible
-    #     #  code
-    #     gsm = pathlib.Path(str(cfg.sky_model.image).rstrip('.fits'))
-    #     gsm_cut = gsm.append('_ICUT_' + sicut)
-    #     gsm_pcut = gsm.append('_pICUT_' + sicut)
-    #     gsm_tcut = gsm.append('_tICUT_' + sicut)
-    #
-    #     ionof_cut = cfg.calibration.tec.image[icut]
-    #     ionot_cut = cfg.root_name.append(
-    #         '_iIcut_' + sicut)  # TEC screen for this time cut (miriad image)
-    #     ionom_cut = cfg.root_name.append(
-    #         '_imIcut_' + sicut)  # TEC screen + residual errors for this time cut (miriad image)
-    #     iono_cut = cfg.root_name.append(
-    #         '_iIcut_' + sicut + '.fits')  # TEC screen + residual errors for this time cut (.fits image)
-    #
-    #     cmpt_mscut = cfg.root_name.append('_ICUT_' + sicut + '.ms')
-    #     cmpt_msmcut = cfg.root_name.append('_ICUT_' + sicut + '.msm')
-    #     cmpt_uvfcut = cfg.root_name.append('_ICUT_' + sicut + '.uvf')
-    #     cmpt_uvcut = cfg.root_name.append('_ICUT_' + sicut + '.uv')
-    #
-    #     out_uvcut = cfg.root_name.append('_ICUT_' + sicut + 'out.uv')
-    #     out_mscut = cfg.root_name.append('_ICUT_' + sicut + 'out.ms')
-    #     out_uvfcut = cfg.root_name.append('_ICUT_' + sicut + 'out.uvf')
-    #
-    #     LOGGER.info(f"Multiplying sky model by beam response, {scan_beam_fits}")
-    #     miriad.fits(op="xyin", _in=scan_beam_fits, out=scan_beam_mirim)
-    #
-    #     # For the image based model cube, it is first necessary to regrid in a
-    #     # way that will allow a single (u,v) grid to represent the data within
-    #     # miriad uvmodel. This is done by taking the lowest frequency as a
-    #     # reference and then scaling the cell size up for higher frequencies.
-    #     # Since the model needs to be in Jy/pixel, it is necessary to reduce
-    #     # the brightness as 1/f**2 to take account of the larger pixel size at
-    #     # higher frequencies.
-    #     expr = f"<{scan_beam_mirim}>*<{sky_model_mir_im}>/z**2"
-    #     zrange = f"1,{cfg.correlator.freq_max / cfg.correlator.freq_min}"
-    #     miriad.maths(exp=expr, out=gsm_pcut, zrange=zrange)
-    #
-    #     text = f'/bin/cp -r {gsm_pcut} {gsm_tcut}'
-    #     subprocess.run(text, shell=True)
-    #
-    #     miriad.puthd(_in=f"{gsm_tcut}/cellscal", value="1/F")
-    #     miriad.regrid(_in=gsm_pcut, tin=gsm_tcut, out=gsm_cut)
-    #
-    #     # Get the relevant cut from the ionospheric model and scale for net
-    #     # residual effect
-    #     miriad.fits(op="xyin", _in=ionof_cut, out=ionot_cut)
-    #     miriad.maths(exp=f"<{ionot_cut}>*{cfg.calibration.tec.err:.3e}",
-    #                  out=ionom_cut)
-    #     miriad.fits(op="xyout", _in=ionom_cut, out=iono_cut)
-    #
-    #     # Adjust oskar's sim_interferometer settings in .ini files
-    #     cfg.set_oskar_sim_interferometer(
-    #         'sky/oskar_sky_model/file', cfg.oskar_sky_model_file
-    #     )
-    #
-    #     cfg.set_oskar_sim_interferometer(
-    #         'observation/start_time_utc',
-    #         t_start.strftime("%Y/%m/%d/%H:%M:%S.%f")[:-2]
-    #     )
-    #
-    #     cfg.set_oskar_sim_interferometer(
-    #         'telescope/external_tec_screen/input_fits_file', iono_cut
-    #     )
-    #
-    #     cfg.set_oskar_sim_interferometer(
-    #         'interferometer/ms_filename', cmpt_mscut
-    #     )
-    #
-    #     cfg.set_oskar_sim_interferometer(
-    #         'observation/length', format(duration, '.1f')
-    #     )
-    #
-    #     cfg.set_oskar_sim_interferometer(
-    #         'observation/num_time_steps', int(duration // cfg.correlator.t_int)
-    #     )
-    #
-    #     cfg.set_oskar_sim_interferometer(
-    #         'interferometer/noise/seed', format(rseed_icut, '.0f')
-    #     )
-    #
-    #     # TODO: Multiple header insertions for telescope -> SKA1-LOW in newest
-    #     # skye_cuts.py need implementing
-    #
-    #     # Run oskar's sim_interferometer task and produce measurement set
-    #     run_oskar_sim_interferometer(cfg.sinterferometer_ini)
-    #
-    #     # Add SKA1-LOW to measurement set header and export measurement set to
-    #     # uvfits format via casa
-    #     casa.tasks.vishead(vis=f"{cmpt_mscut}", mode="put", hdkey="telescope",
-    #                        hdvalue="SKA1-LOW")
-    #     casa.tasks.exportuvfits(vis=f"{cmpt_mscut}", fitsfile=f"{cmpt_uvfcut}",
-    #                             datacolumn="data", multisource=False,
-    #                             writestation=False, overwrite=True)
-    #
-    #     miriad.fits(op='uvin', _in=cmpt_uvfcut, options="nofq", out=cmpt_uvcut)
-    #     miriad.uvmodel(vis=cmpt_uvcut, model=gsm_cut, options="add,zero",
-    #                    out=out_uvcut)
-    #
-    #     # TODO: t_interval hard-coded
-    #     implement_gain_errors(out_uvcut, t_interval=240.,
-    #                           pnoise=cfg.calibration.gains.phase_err,
-    #                           gnoise=cfg.calibration.gains.amp_err,
-    #                           rseed=rseed_icut)
-    #
-    #     implement_bandpass_errors(out_uvcut, nchan=cfg.correlator.n_chan,
-    #                               pnoise=cfg.calibration.gains.phase_err,
-    #                               gnoise=cfg.calibration.gains.amp_err,
-    #                               rseed=rseed_icut)
-    #
-    #     miriad.fits(op='uvout', _in=out_uvcut, out=out_uvfcut)
-    #
-    #     casa.tasks.importuvfits(vis=f"{out_mscut}", fitsfile=f"{out_uvfcut}")
-    #     measurement_sets.append(out_mscut)
-
-    # Concatenate all measurement sets produced in the above for-loop using casa
-    # so that a single final visibility dataset is produced for the challenge
-    # casa.tasks.concat(vis=[str(ms) for ms in measurement_sets],
-    #                   concatvis=f"{cfg.root_name}.ms",
-    #                   timesort=True)
-
+    # ######################################################################## #
+    # ##################### Deconvolution/imaging run ######################## #
+    # ######################################################################## #
     gaussian_taper_arcsec = 60.  # in arcsec
     niter = 10000
 
+    LOGGER.info(f"Conducting deconvolution/imaging with WSClean")
     wsclean_args = {
         'weight': 'uniform',
         'taper-gaussian': f'{gaussian_taper_arcsec}asec',
@@ -1129,22 +633,9 @@ if not model_only:
     farm.software.wsclean(f"{cfg.root_name}.ms", wsclean_args,
                           consolidate_channels=True)
 
-# Ionospheric simulation altered to 4 hour total, sliced into relevant parts to
-# correspond with scans
-
-# TODO: Explore oskar options for parallelisation and GPU use?
-# TODO: Sanity checks need implementing at each stage
-# TODO: All-sky view of strong sources
-# TODO: Remove any intermediate data-products
-
-# ############################################################################ #
-# p_k_field, bins_field = pbox.get_power(imdata_gssm[0], (0.002, 0.002,))
-#
-# plt.close('all')
-#
-# plt.plot(bins_field, p_k_field, 'b-')
-#
-# plt.xscale('log')
-# plt.yscale('log')
-#
-# plt.show()
+    # ######################################################################## #
+    # ########################### Finishing up ############################### #
+    # ######################################################################## #
+    pipeline_duration = (datetime.now() - pipeline_start)
+    LOGGER.info(f"Finished {pathlib.Path(__file__).name} pipeline in "
+                f"{misc.timedelta_to_ddhhmmss(pipeline_duration)}")

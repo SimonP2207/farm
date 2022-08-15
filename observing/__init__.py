@@ -48,6 +48,16 @@ class Scan:
 
     def create_beam_pattern_fits(self, cfg: FarmConfiguration,
                                  beam_fits: pathlib.Path):
+        """
+        Create the primary beam pattern for this scan using Oskar
+
+        Parameters
+        ----------
+        cfg
+            FarmConfiguration file
+        beam_fits
+            Full path for output .fits file
+        """
         from .. import miscellaneous as misc
         from ..software.oskar import run_oskar_sim_beam_pattern
 
