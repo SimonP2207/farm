@@ -412,6 +412,9 @@ if len(sys.argv) != 1:
     parser.add_argument("-d", "--debug",
                         help="Set terminal log output to verbose levels",
                         action="store_true")
+    parser.add_argument("-r", "--dry-run",
+                        help="Complete a dry run to check for validity",
+                        action="store_true")
     args = parser.parse_args()
     config_file = pathlib.Path(args.config_file)
     model_only = args.model_only
@@ -419,13 +422,14 @@ if len(sys.argv) != 1:
 else:
     config_file = pathlib.Path(farm.data.FILES['EXAMPLE_CONFIG'])
     model_only = False
+    dryrun = False
     log_level = logging.DEBUG
 
 cfg = loader.FarmConfiguration(config_file)
 if len(sys.argv) != 1:
     os.chdir(cfg.output_dcy)
 
-dryrun = False
+
 # ############################################################################ #
 # ######################## Set up the logger ################################# #
 # ############################################################################ #
@@ -507,7 +511,7 @@ if cfg.sky_model.galactic.large_scale_component.include:
     if not cfg.sky_model.galactic.small_scale_component:
         sky_model.add_component(gdsm)
     else:
-        if not dryrun:
+        if dryrun:
             LOGGER.info(f"DRYRUN: Skipping .fits creation for {gdsm.name} "
                         f"SkyComponent")
         else:
@@ -559,7 +563,7 @@ if cfg.sky_model.galactic.small_scale_component.include:
         merged = gssm.merge(gdsm, (gssm.cdelt, gssm.cdelt, 0.),
                             (56. / 60., 56. / 60., 0.), 'GASM')
         sky_model.add_component(merged)
-        if not dryrun:
+        if dryrun:
             LOGGER.info(f"DRYRUN: Skipping .fits creation for {gssm.name} "
                         f"SkyComponent")
         else:
