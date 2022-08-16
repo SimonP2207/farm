@@ -765,14 +765,6 @@ class FarmConfiguration:
         self.sbeam_ini = self.setup_sim_beam_pattern_ini()
         self.sinterferometer_ini = self.setup_sim_interferometer_ini()
 
-        # TODO: SORT THIS BIT OUT. EACH TYPE OF OSKAR TASK NEEDS A SETTING FILE.
-        #  DECIDE WHETHER TO WRITE AND USE AN INI FILE OR TO USE OSKAR'S
-        #  PYTHON IMPLEMENTATION
-        import oskar
-        self.oskar_sim_interferometer_settings = oskar.SettingsTree(
-            'oskar_sim_interferometer'
-        )
-
     def setup_sim_interferometer_ini(self):
         """
         Sets up .ini file for oskar's sim_interferometer task from configuration
