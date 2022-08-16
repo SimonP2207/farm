@@ -11,6 +11,8 @@ import argparse
 import pathlib
 from datetime import datetime
 from joblib import Parallel, delayed
+from joblib.externals.loky import set_loky_pickler
+set_loky_pickler('dill')
 
 import numpy as np
 from astropy.io import fits
@@ -522,36 +524,20 @@ scans = [Scan(start, end) for start, end in scan_times]
 observation = Observation(cfg)
 observation.add_scan(scans)
 
-measurement_sets = {}
 
-fn_n_scan = observation.n_scan
-fn_generate_scan_seed = observation.generate_scan_seed
-fn_create_beam_pattern = observation.create_beam_pattern
-fn_get_scan_tec_screen_slice = observation.get_scan_tec_screen_slice
-fn_execute_scan = observation.execute_scan
-casa_fn_vishead = casa.tasks.vishead
-casa_fn_importuvfits = casa.tasks.importuvfits
-casa_fn_exportuvfits = casa.tasks.exportuvfits
-mir_fn_fits = miriad.fits
-mir_fn_uvmodel = miriad.uvmodel
-mir_fn_puthd = miriad.puthd
-mir_fn_implement_gain_errors = miriad.implement_gain_errors
-mir_fn_implement_bandpass_errors = miriad.implement_bandpass_errors
-
-
-def obs_loop(scan):
-    n_scan = fn_n_scan(scan)
-    rseed_scan = fn_generate_scan_seed(cfg.calibration.noise.seed, scan)
+def obs_loop(cfg, observation, scan):
+    n_scan = observation.n_scan(scan)
+    observation.generate_scan_seed(cfg.calibration.noise.seed, scan)
     n_scan_str = format(n_scan, f'0{len(str(observation.n_scans)) + 1}')
 
     # Primary beam creation
     scan_beam_fits = cfg.root_name.append(f'_ICUT_{n_scan_str}.fits')
-    fn_create_beam_pattern(scan, scan_beam_fits, resample=16,
-                           template=cfg.sky_model.image)
+    observation.create_beam_pattern(scan, scan_beam_fits, resample=16,
+                                    template=cfg.sky_model.image)
 
     if tecscreen:
         scan_tec_fits = cfg.root_name.append(f'_TEC_{n_scan_str}.fits')
-        fn_get_scan_tec_screen_slice(tecscreen, scan, scan_tec_fits)
+        observation.get_scan_tec_screen_slice(tecscreen, scan, scan_tec_fits)
 
     # For the image based model cube, it is first necessary to regrid in a
     # way that will allow a single (u,v) grid to represent the data within
@@ -571,13 +557,13 @@ def obs_loop(scan):
         f'_ICUT_{n_scan_str}.ms'
     )
     scan_out_uvfits = scan_out_ms.with_suffix('.uvfits')
-    fn_execute_scan(scan, scan_out_ms)
+    observation.execute_scan(scan, scan_out_ms)
 
     # Add SKA1-LOW to measurement set header and export measurement set to
     # uvfits format via casa
-    casa_fn_vishead(vis=f"{scan_out_ms}", mode="put", hdkey="telescope",
+    casa.tasks.vishead(vis=f"{scan_out_ms}", mode="put", hdkey="telescope",
                     hdvalue="SKA1-LOW")
-    casa_fn_exportuvfits(vis=f"{scan_out_ms}",
+    casa.tasks.exportuvfits(vis=f"{scan_out_ms}",
                          fitsfile=f"{scan_out_uvfits}",
                          datacolumn="data", multisource=False,
                          writestation=False, overwrite=True)
@@ -592,24 +578,24 @@ def obs_loop(scan):
     scan_out_uvfits.unlink()
 
     # Add sky model to visibility data
-    mir_fn_fits(op='xyin', _in=sky_model_pbcor, out=sky_model_pbcor_mirim)
-    mir_fn_uvmodel(vis=temp_scan_out_mirvis, model=sky_model_pbcor_mirim,
+    miriad.fits(op='xyin', _in=sky_model_pbcor, out=sky_model_pbcor_mirim)
+    miriad.uvmodel(vis=temp_scan_out_mirvis, model=sky_model_pbcor_mirim,
                    options="add,zero", out=scan_out_mirvis)
     shutil.rmtree(temp_scan_out_mirvis)
 
-    mir_fn_puthd(_in=f"{scan_out_mirvis}/restfreq", value=1.42040575)
-    mir_fn_puthd(_in=f"{scan_out_mirvis}/telescop", value="SKA1-LOW")
+    miriad.puthd(_in=f"{scan_out_mirvis}/restfreq", value=1.42040575)
+    miriad.puthd(_in=f"{scan_out_mirvis}/telescop", value="SKA1-LOW")
 
     # Implement gain and bandpass errors
     # TODO: t_interval hard-coded here
-    mir_fn_implement_gain_errors(
+    observation.implement_gain_errors(
         scan_out_mirvis, t_interval=240.,
         pnoise=cfg.calibration.gains.phase_err,
         gnoise=cfg.calibration.gains.amp_err,
         rseed=observation.products[scan]['seed']
     )
 
-    mir_fn_implement_bandpass_errors(
+    observation.implement_bandpass_errors(
         scan_out_mirvis, nchan=cfg.correlator.n_chan,
         freq0=cfg.correlator.freq_min,
         chan_width=cfg.correlator.chan_width,
@@ -618,10 +604,10 @@ def obs_loop(scan):
         rseed=observation.products[scan]['seed']
     )
 
-    mir_fn_fits(op='uvout', _in=scan_out_mirvis, out=scan_out_uvfits)
+    miriad.fits(op='uvout', _in=scan_out_mirvis, out=scan_out_uvfits)
     shutil.rmtree(scan_out_mirvis)
 
-    casa_fn_importuvfits(vis=f"{scan_out_ms}",
+    casa.tasks.importuvfits(vis=f"{scan_out_ms}",
                          fitsfile=f"{scan_out_uvfits}")
     scan_out_uvfits.unlink()
     casa.tasks.vishead(vis=f"{scan_out_ms}", mode="put", hdkey="telescope",
