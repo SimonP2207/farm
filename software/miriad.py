@@ -271,8 +271,15 @@ class Miriad(object):
 
     @staticmethod
     def _help(taskname):
+        # When pickled for parallelisation, sys.stdin in None, leading to
+        # AttributeError when deriving stdin's encoding. Therefore return empty
+        # string
+        if sys.stdin is None:
+            return ""
+
         p = subprocess.Popen('miriad', shell=True, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
 
         # SJDP changed 'utf-8' to sys.stdin.encoding: 10/02/22
         p.stdin.write("{} {}\n{}\n".format("help", taskname, "exit")
