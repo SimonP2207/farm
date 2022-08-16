@@ -383,7 +383,8 @@ class Observation:
         scan_ini = self.cfg.sinterferometer_ini.with_name(
                         self.cfg.sinterferometer_ini.name.replace(
                             self.cfg.sinterferometer_ini.suffix,
-                            f"_scan{0}{self.cfg.sinterferometer_ini.suffix}"
+                            f"_scan{self.n_scan(scan)}"
+                            f"{self.cfg.sinterferometer_ini.suffix}"
                         )
                     )
         shutil.copyfile(self.cfg.sinterferometer_ini, scan_ini)

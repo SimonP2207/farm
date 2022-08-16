@@ -824,10 +824,10 @@ class FarmConfiguration:
             set_oskar_sim_interferometer(f, 'interferometer/noise/rms', 'Data')
             set_oskar_sim_interferometer(f, 'interferometer/noise/rms/file',
                                          self.calibration.noise.sefd_rms_file)
-            set_oskar_sim_interferometer(f, 'sky/fits_image/file',
-                                         self.sky_model.image)
-            set_oskar_sim_interferometer(f, 'sky/fits_image/default_map_units',
-                                         'K')
+            # set_oskar_sim_interferometer(f, 'sky/fits_image/file',
+            #                              self.sky_model.image)
+            # set_oskar_sim_interferometer(f, 'sky/fits_image/default_map_units',
+            #                              'K')
 
         return ini_file
 
