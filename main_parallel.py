@@ -525,6 +525,8 @@ observation.add_scan(scans)
 
 
 def obs_loop(cfg, observation, scan):
+    sky_model_mir_im = cfg.sky_model.image.with_suffix('.im')
+
     n_scan = observation.n_scan(scan)
     observation.generate_scan_seed(cfg.calibration.noise.seed, scan)
     n_scan_str = format(n_scan, f'0{len(str(observation.n_scans)) + 1}')
