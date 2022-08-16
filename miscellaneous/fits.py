@@ -3,6 +3,8 @@ Contains any file-handling methods related to .fits files
 """
 from pathlib import Path
 from typing import Tuple
+
+import astropy.coordinates
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -61,7 +63,26 @@ def fits_hdr_frequencies(header: Header) -> npt.NDArray:
     return np.linspace(freq_min, freq_max, header["NAXIS3"])
 
 
-def hdr2d(n_x: int, n_y: int, coord0, cdelt, frame='fk5') -> Header:
+def hdr2d(n_x: int, n_y: int, coord0: astropy.coordinates.SkyCoord,
+          cdelt: float) -> Header:
+    """
+    Create a 2D (RA and Dec) header
+
+    Parameters
+    ----------
+    n_x
+        Number of pixels in x/R.A.
+    n_y
+        Number of pixels in y/declination
+    coord0
+        Central pixel coordinate
+    cdelt
+        Cell size [deg]
+
+    Returns
+    -------
+    Created header as an astropy.io.fits.Header instance
+    """
     hdr = Header({'Simple': True})
     hdr.set('BITPIX', -32)
     hdr.set('NAXIS', 2)
@@ -82,10 +103,29 @@ def hdr2d(n_x: int, n_y: int, coord0, cdelt, frame='fk5') -> Header:
     return hdr
 
 
-def hdr3d(n_x: int, n_y: int, coord0, cdelt, frequencies: npt.ArrayLike,
-          frame='fk5') -> Header:
+def hdr3d(n_x: int, n_y: int, coord0, cdelt: float,
+          frequencies: npt.ArrayLike) -> Header:
+    """
+    Create a 3D (RA, declination and frequency) header
 
-    hdr = hdr2d(n_x, n_y, coord0, cdelt, frame)
+    Parameters
+    ----------
+    n_x
+        Number of pixels in x/R.A.
+    n_y
+        Number of pixels in y/declination
+    coord0
+        Central pixel coordinate
+    cdelt
+        Cell size [deg]
+    frequencies
+        Full list/numpy array of cube channel frequencies
+
+    Returns
+    -------
+    Created header as an astropy.io.fits.Header instance
+    """
+    hdr = hdr2d(n_x, n_y, coord0, cdelt)
     hdr.insert('NAXIS2', ('NAXIS3', len(frequencies)), after=True)
     hdr.insert('CTYPE2', ('CTYPE3', 'FREQ    '), after=True)
     hdr.insert('CRVAL2', ('CRVAL3', min(frequencies)), after=True)
@@ -97,6 +137,7 @@ def hdr3d(n_x: int, n_y: int, coord0, cdelt, frequencies: npt.ArrayLike,
         hdr.set('CDELT3', frequencies[1] - frequencies[0])
 
     return hdr
+
 
 def is_fits(file: Path) -> bool:
     """Determine if a file is a fits file"""

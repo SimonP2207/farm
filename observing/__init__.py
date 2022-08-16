@@ -1,3 +1,4 @@
+"""Contains Scan and Observation classes for conduction sythetic observations"""
 import pathlib
 import shutil
 from typing import List, Union, Iterable, Optional
@@ -18,6 +19,7 @@ class Scan:
 
     @property
     def duration(self):
+        """Scan duration in seconds"""
         # Avoid floating point discrepancies with round
         return round((self.end - self.start).to_value('s'), 1)
 
@@ -105,18 +107,20 @@ class Observation:
 
     _PRODUCT_TYPES = ('image', 'PB', 'MS', 'TEC', 'seed')
 
-    def  __init__(self, config: FarmConfiguration,
-                  scans: Union[List[Scan], None] = None):
+    def __init__(self, config: FarmConfiguration,
+                 scans: Union[List[Scan], None] = None):
         self._config = config
         self._scans = scans if scans else []
         self._products = {}
 
     @property
     def cfg(self):
+        """FarmConfiguration instance"""
         return self._config
 
     @property
     def products(self):
+        """Data/internal products of the observation"""
         return self._products
 
     @products.setter
@@ -155,12 +159,14 @@ class Observation:
 
     @property
     def n_scans(self) -> int:
+        """Number of scans within the observation"""
         return len(self.scans)
 
     def n_scan(self, scan: Scan):
+        """Sequential scan number for a particular scan"""
         from ..miscellaneous import error_handling as errh
 
-        if not scan in self.scans:
+        if scan not in self.scans:
             errh.raise_error(ValueError,
                              "Please add {scan} to Observation instance scans "
                              "using add_scan method")
@@ -193,7 +199,7 @@ class Observation:
         ValueError
             If scan has not been added to the Observation instance's scans
         """
-        from .. import miscellaneous as misc
+        from ..miscellaneous import generate_random_chars as grc
         from ..miscellaneous import error_handling as errh
         from ..software.oskar import run_oskar_sim_beam_pattern
 
@@ -206,7 +212,7 @@ class Observation:
         # Assign filename of output beam from oskar's sim_beam_pattern to
         # variable, oskar_out_beam_fname
         beam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
-        beam_root = self.cfg.root_name.append(f"_{misc.generate_random_chars(10)}")
+        beam_root = self.cfg.root_name.append(f"_{grc(10)}")
         beam_name = beam_root.append(beam_sfx)
         oskar_out_beam_fname = beam_name.append('.fits')
 

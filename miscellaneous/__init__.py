@@ -6,10 +6,11 @@ from typing import Union
 from datetime import timedelta
 import numpy as np
 import numpy.typing as npt
-from . import decorators, error_handling, fits, image_functions, plotting, file_handling
+from . import (decorators, error_handling, fits, image_functions, plotting,
+               file_handling)
 
 __all__ = ['decorators', 'error_handling', 'fits', 'image_functions',
-           'plotting', 'file_handling']
+           'plotting', 'file_handling', 'generate_random_chars']
 
 
 def timedelta_to_ddhhmmss(td: timedelta):

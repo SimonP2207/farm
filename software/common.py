@@ -7,6 +7,7 @@ import os
 def which(program: str):
     """Equivalent of unix 'which' command"""
     def is_exe(fpath_):
+        """Is the file an executable?"""
         return os.path.exists(fpath_) and os.access(fpath_, os.X_OK)
 
     if program:

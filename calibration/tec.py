@@ -113,7 +113,7 @@ def create_tec_screen(fitsfile: pathlib.Path, fov: float,
     with open(fitsfile, 'rb+') as fobj:
         fobj.seek(len(hdr.tostring()) +
                   (np.product(shape) * np.abs(hdr['BITPIX'] // 8)) -
-                  1)# + 240 * 8)
+                  1)  # + 240 * 8)
         fobj.write(b'\0')
 
     with fits.open(fitsfile, memmap=True, mode='update') as hdul:
@@ -135,7 +135,7 @@ def create_tec_screens(farm_cfg: 'FarmConfiguration',
     ----------
     farm_cfg
         FarmConfiguration instance to parse information from
-    scan_times
+    scans
         Tuple of (start, end)
     tec_prefix
         Prefix to append to ionospheric TEC .fits files

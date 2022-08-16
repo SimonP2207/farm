@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import numpy.testing as npt
 
-from farm.sky_model.classes import SkyModel, SkyComponent
+from farm.sky_model._classes import SkyModel, SkyComponent
 from farm.sky_model.tb_functions import gdsm2016_t_b
 import farm.tests.fits_test_data as ftd
 

@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 import sys
-import warnings
 import pathlib
 from typing import ByteString, Tuple
 import numpy as np

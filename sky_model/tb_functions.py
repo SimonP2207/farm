@@ -17,17 +17,36 @@ from reproject import reproject_from_healpix
 from farm.physics import astronomy as ast
 
 # Define expected types for typing
-SkyCompType = TypeVar('SkyComponent')
+SkyComponent = TypeVar('SkyComponent')
 FreqType = Union[float, npt.NDArray[np.float32]]
 ReturnType = npt.NDArray[np.float32]
 
 
 class TbFunction(Protocol):
-    def __call__(self, sky_component: SkyCompType,
+    """
+    Typing class to give correct arg and return types for brightness temperature
+    functions
+    """
+    def __call__(self, sky_component: SkyComponent,
                  freq: FreqType) -> ReturnType: ...
 
 
-def gdsm2016_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
+def gdsm2016_t_b(sky_component: SkyComponent, freq: FreqType) -> ReturnType:
+    """
+    Brightness temperature function for global diffuse sky model
+
+    Parameters
+    ----------
+    sky_component
+        SkyComponent instance
+    freq
+        Frequency(s) at which to calculate the sky temperature brightness
+        distribution [Hz]
+
+    Returns
+    -------
+    2D brightness temperature distribution [K]
+    """
     import logging
     from pygdsm import GlobalSkyModel2016
     from astropy.io import fits
@@ -64,7 +83,22 @@ def gdsm2016_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
     return ast.intensity_to_tb(i_nu, freq)
 
 
-def fits_t_b(sky_component: SkyCompType, freq: FreqType) -> ReturnType:
+def fits_t_b(sky_component: SkyComponent, freq: FreqType) -> ReturnType:
+    """
+    Brightness temperature function for a .fits image cube
+
+    Parameters
+    ----------
+    sky_component
+        SkyComponent instance
+    freq
+        Frequency(s) at which to calculate the sky temperature brightness
+        distribution [Hz]
+
+    Returns
+    -------
+    2D brightness temperature distribution [K]
+    """
     matching_freq_idx = np.where(sky_component.frequencies == freq)[0][0]
 
     return sky_component.data('K')[matching_freq_idx]

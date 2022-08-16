@@ -10,6 +10,7 @@ import logging
 import argparse
 import pathlib
 from datetime import datetime
+from joblib import Parallel, delayed
 
 import numpy as np
 from astropy.io import fits
@@ -522,7 +523,9 @@ observation = Observation(cfg)
 observation.add_scan(scans)
 
 measurement_sets = {}
-for scan in observation.scans:
+
+
+def obs_loop(scan):
     n_scan = observation.n_scan(scan)
     rseed_scan = observation.generate_scan_seed(cfg.calibration.noise.seed,
                                                 scan)
@@ -613,6 +616,10 @@ for scan in observation.scans:
                        hdvalue="SKA1-LOW")
 
     observation.products[scan]['MS'] = scan_out_ms
+
+
+scans = observation.scans
+Parallel(n_jobs=len(scans))(delayed(obs_loop)(scan) for scan in scans)
 
 out_ms = cfg.root_name.append('.ms')
 observation.concat_scan_measurement_sets(out_ms)

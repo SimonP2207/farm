@@ -152,7 +152,7 @@ def is_miriad_image(mir_im: pathlib.Path):
 def calculate_spix(data_cube: npt.ArrayLike,
                    frequencies: npt.ArrayLike,
                    interpolate_nans: bool = True
-                  ) -> Tuple[npt.NDArray, npt.NDArray]:
+                   ) -> Tuple[npt.NDArray, npt.NDArray]:
     """
     Calculate the spectral index across a SkyModel or Skycomponent instance
     field of view, using standard least squares regression
@@ -283,22 +283,22 @@ def rotate_image(image_data: np.ndarray, phi: float,
     # rotations of -45 deg <= phi <= +45 deg)
     for iplan in range(0, zlen, 1):
         for icol in range(0, xlen, 1):
-            gx[iplan, icol, :] = np.real(np.fft.ifft(np.fft.fft(
-                impad[iplan, icol, :]) *
-                                                     np.exp(-2.j * np.pi * (
-                                                                 icol - xlen / 2) * ufreq * a)))
+            gx[iplan, icol, :] = np.real(np.fft.ifft(
+                np.fft.fft(impad[iplan, icol, :]) *
+                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * a)
+            ))
 
         for icol in range(0, xlen, 1):
-            gyx[iplan, :, icol] = np.real(np.fft.ifft(np.fft.fft(
-                gx[iplan, :, icol]) *
-                                                      np.exp(-2.j * np.pi * (
-                                                                  icol - xlen / 2) * ufreq * b)))
+            gyx[iplan, :, icol] = np.real(np.fft.ifft(
+                np.fft.fft(gx[iplan, :, icol]) *
+                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * b)
+            ))
 
         for icol in range(0, xlen, 1):
-            gxyx[iplan, icol, :] = np.real(np.fft.ifft(np.fft.fft(
-                gyx[iplan, icol, :]) *
-                                                       np.exp(-2.j * np.pi * (
-                                                                   icol - xlen / 2) * ufreq * a)))
+            gxyx[iplan, icol, :] = np.real(np.fft.ifft(
+                np.fft.fft(gyx[iplan, icol, :]) *
+                np.exp(-2.j * np.pi * (icol - xlen / 2) * ufreq * a)
+            ))
 
     return crop_frac(gxyx, 0.5, 0.5)
 

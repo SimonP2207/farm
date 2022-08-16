@@ -2,7 +2,6 @@
 All methods related to the loading of FARM configuration files
 """
 import datetime
-import random
 from pathlib import Path
 from typing import Union, List, Tuple, Any, Optional, Dict
 from dataclasses import dataclass, field
@@ -78,7 +77,7 @@ def check_config_validity(config_dict: dict):
 
         def return_val(self, dict_: dict) -> Union[Any, Exception]:
             """Return value from a dictionary corresponding to Param instance"""
-            entry = config_dict.copy()
+            entry = dict_.copy()
 
             try:
                 for key in self.keys:
@@ -194,6 +193,7 @@ def check_config_validity(config_dict: dict):
 
 
 def load_configuration(toml_file: Union[Path, str]) -> dict:
+    """Load a .toml configuration file and return it as a dict"""
     if not isinstance(toml_file, Path):
         toml_file = Path(toml_file)
 
@@ -211,16 +211,20 @@ def load_configuration(toml_file: Union[Path, str]) -> dict:
 
 @dataclass
 class Observation:
+    """
+    Class containing all information and methods pertaining to a full synthetic
+    observation of variable numbers of scans
+    """
     t_start: Time  # start time of observation
     t_total: int  # s
     n_scan: int  # s
     min_gap_scan: int  # s
     min_elevation: int  # deg
 
-    def scan_times(self, coord0: SkyCoord,
-                   location: EarthLocation,
-                   partial_scans_allowed: bool = False) -> Tuple[
-        Tuple[Time, Time], ...]:
+    def scan_times(
+            self, coord0: SkyCoord, location: EarthLocation,
+            partial_scans_allowed: bool = False
+    ) -> Tuple[Tuple[Time, Time], ...]:
         """
         Calculates scan_times for the Observation for a particular pointing
         centre, from a specific location
@@ -255,6 +259,7 @@ class Observation:
 
 @dataclass
 class Field:
+    """Class for holding observational field information"""
     _ra0: str
     _dec0: str
     _frame: str
@@ -264,20 +269,24 @@ class Field:
 
     @property
     def coord0(self):
+        """Pointing centre as a SkyCoord instance"""
         return SkyCoord(self._ra0, self._dec0, frame=self._frame,
                         unit=(u.hourangle, u.deg))
 
     @property
     def fov(self):
+        """Field of view in x and y as a 2-tuple in deg"""
         return self.nx * self.cdelt, self.ny * self.cdelt
 
     @property
     def area(self):
+        """Total area of field of view in deg^2"""
         return np.prod(self.fov)
 
 
 @dataclass
 class Correlator:
+    """Class for handling all information pertaining to a Correlator setup"""
     freq_min: float  # minimum frequency [Hz]
     freq_max: float  # maximum frequency [Hz]
     n_chan: int  # number of evenly spaced channels from freq_min to freq_max
@@ -286,15 +295,18 @@ class Correlator:
 
     @property
     def frequencies(self):
+        """All channel frequencies [Hz]"""
         return np.linspace(self.freq_min, self.freq_max, self.n_chan)
 
     @property
     def freq_inc(self):
+        """Frequency gap between neighbouring channels"""
         return self.frequencies[1] - self.frequencies[0]
 
 
 @dataclass
 class TEC:
+    """Class for handling all TEC-screen information"""
     create: bool
     image: List[Path]
     err: float = field(default=0.0)
@@ -323,6 +335,10 @@ class TEC:
 
 @dataclass
 class Noise:
+    """
+    Class for handling informaiton needed for generation of noise within the
+    synthetic observation
+    """
     seed: int
     sefd_freq_file: Union[str, Path]
     sefd_file: Union[str, Path]
@@ -357,6 +373,7 @@ class Noise:
         return True
 
     def create_sefd_rms_file(self, file_name: Path, *args, **kwargs):
+        """Create file with System Equivalent Flux Density rms noises"""
         from ..calibration.noise import sefd_to_rms
 
         sefd_rms = sefd_to_rms(np.loadtxt(self.sefd_file), *args, **kwargs)
@@ -367,26 +384,33 @@ class Noise:
 
 @dataclass
 class Gains:
+    """Class for handling implemented gain error information"""
     amp_err: float = field(default=0.0)
     phase_err: float = field(default=0.0)
 
     def __post_init__(self):
         if self.amp_err < 0.0 or self.amp_err > 100.0:
             raise ValueError(f"Invalid residual amplitude error value given "
-                             f"for gains ({self.err:.2f}). Should be "
+                             f"for gains ({self.amp_err:.2f}). Should be "
                              f"0 < err <= 100")
         if self.phase_err < 0.0:
             raise ValueError(f"Invalid residual phase error value given "
-                             f"for gains ({self.err:.2f}). Should be >= 0")
+                             f"for gains ({self.phase_err:.2f}). "
+                             f"Should be >= 0")
 
 
 @dataclass
 class DDEffects:
+    """Future class for handling direction-dependent errors and effects"""
     pass
 
 
 @dataclass
 class Calibration:
+    """
+    Composite dataclass containing of all calibration related class instances
+    for Noise, TEC, Gains and DDEffects
+    """
     noise: Union[bool, Noise]
     tec: Union[bool, TEC]
     gains: Union[bool, Gains]
@@ -395,6 +419,10 @@ class Calibration:
 
 @dataclass
 class Station:
+    """
+    Dataclass for handling individual station information in an interferometric
+    array
+    """
     station_model: Path
     position: Tuple[float, float, float]
     ants: Dict = field(init=False)
@@ -509,6 +537,7 @@ class Telescope:
 
 @dataclass
 class SkyComponentConfiguration:
+    """Parent class handling SkyComponent inclusion/loading"""
     include: bool
     image: Union[str, Path]
 
@@ -519,16 +548,19 @@ class SkyComponentConfiguration:
 
 @dataclass
 class EoR21cmConfiguration(SkyComponentConfiguration):
+    """Class handling epoch of reionisation hydrogen 21cm signal inclusion"""
     create: bool
 
 
 @dataclass
 class ATeamConfiguration(SkyComponentConfiguration):
+    """Class handling A-Team inclusion and demixing error"""
     demix_error: float
 
 
 @dataclass
 class ExtragalacticComponentConfiguration(SkyComponentConfiguration):
+    """Class handling extragalactic source inclusion/creation"""
     create: bool
     flux_inner: float
     flux_outer: float
@@ -537,33 +569,38 @@ class ExtragalacticComponentConfiguration(SkyComponentConfiguration):
 
 @dataclass
 class ExtragalacticConfiguration(SkyComponentConfiguration):
+    """
+    Composite class composed of real and artificial extragalactic source
+    inclusion as separate instances of ExtragalacticComponentConfiguration
+    instances
+    """
     real_component: Union[ExtragalacticComponentConfiguration, None]
     artifical_component: Union[ExtragalacticComponentConfiguration, None]
 
 
 @dataclass
 class GalacticComponentConfiguration(SkyComponentConfiguration):
+    """Class handling inclusion information for the Galactic component"""
     create: bool
 
 
 @dataclass
 class GalacticConfiguration(SkyComponentConfiguration):
+    """
+    Composite class composed of Galactic small and large scale source
+    inclusion as separate instances of GalacticComponentConfiguration
+    instances
+    """
     large_scale_component: Union[GalacticComponentConfiguration, None]
     small_scale_component: Union[GalacticComponentConfiguration, None]
 
 
-# @dataclass
-# class SkyModelConfiguration:
-#     h21cm: Union[bool, SkyComponentConfiguration]
-#     ateam: Union[bool, SkyComponentConfiguration]
-#     gdsm: Union[bool, SkyComponentConfiguration]
-#     gssm: Union[bool, SkyComponentConfiguration]
-#     extragal_known: Union[bool, SkyComponentConfiguration]
-#     extragal_trecs: Union[bool, SkyComponentConfiguration]
-
-
 @dataclass
 class SkyModelConfiguration:
+    """
+    Composite class representing full SkyModel inclusion information comprised
+    of H-21cm, A-Team, Galactic and Extragalactic component instances
+    """
     h21cm: Union[bool, EoR21cmConfiguration]
     ateam: Union[bool, ATeamConfiguration]
     galactic: Union[bool, GalacticConfiguration]
@@ -571,6 +608,10 @@ class SkyModelConfiguration:
 
 
 class FarmConfiguration:
+    """
+    Class to handle the configuration of running pipelines utilising the farm
+    library
+    """
     @decorators.suppress_warnings("astropy", "erfa")
     def __init__(self, configuration_file: Path):
         self.cfg = load_configuration(configuration_file)
@@ -715,6 +756,8 @@ class FarmConfiguration:
             extragalactic=extragalactic,
         )
 
+        # TODO: Should the image attribute be assigned in the
+        #  SkyModelConfiguration class?
         self.sky_model.image = (self.output_dcy /
                                 f'{self.root_name}_sky_model.fits')
         self.oskar_sky_model_file = self.output_dcy / 'oskar_sky_sources.data'
