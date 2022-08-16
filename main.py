@@ -440,6 +440,7 @@ if not MODEL_ONLY:
             f"\tScan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
             f" to {end.strftime('%d%b%Y %H:%M:%S').upper()} "
             f"({(end - start).to_value('s'):.1f}s)")
+        msg += '' if idx == (len(scan_times) - 1) else '\n'
     for line in msg.split('\n'):
         LOGGER.info(line)
 
