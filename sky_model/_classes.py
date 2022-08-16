@@ -58,7 +58,7 @@ def hdr2d_from_skymodel(sky_class: Type[SkyClassType]) -> Header:
     from ..miscellaneous.fits import hdr2d
 
     return hdr2d(sky_class.n_x, sky_class.n_y, sky_class.coord0,
-                 sky_class.cdelt, sky_class.coord0.frame.name)
+                 sky_class.cdelt)
 
 
 def hdr3d_from_skyclass(sky_class: Type[SkyClassType]) -> Header:
@@ -69,8 +69,7 @@ def hdr3d_from_skyclass(sky_class: Type[SkyClassType]) -> Header:
                          "information")
 
     return hdr3d(sky_class.n_x, sky_class.n_y, sky_class.coord0,
-                 sky_class.cdelt, sky_class.frequencies,
-                 sky_class.coord0.frame.name)
+                 sky_class.cdelt, sky_class.frequencies)
 
 
 def deconvolve_fwhm(conv_size: float, beam_size: float) -> float:
@@ -192,7 +191,7 @@ class _BaseSkyClass(ABC):
         # Set up fits header, WCS and data array
         im_hdr = hdr3d(int(fov[0] // cdelt),
                        int(fov[1] // cdelt),
-                       coord0, cdelt, freqs, 'fk5')
+                       coord0, cdelt, freqs)
         im_hdr.insert('CUNIT3', ('BUNIT', 'JY/PIXEL'), after=True)
         im_wcs = wcs.WCS(im_hdr)
         im_data = np.zeros((im_hdr['NAXIS3'],
