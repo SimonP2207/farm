@@ -535,7 +535,7 @@ def obs_loop(cfg, observation, scan):
     observation.create_beam_pattern(scan, scan_beam_fits, resample=16,
                                     template=cfg.sky_model.image)
 
-    if tecscreen:
+    if cfg.calibration.tec:
         scan_tec_fits = cfg.root_name.append(f'_TEC_{n_scan_str}.fits')
         observation.get_scan_tec_screen_slice(tecscreen, scan, scan_tec_fits)
 

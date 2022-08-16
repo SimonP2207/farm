@@ -236,7 +236,7 @@ class Observation:
         scan_sbeam_ini = self.cfg.sbeam_ini.with_name(
                              self.cfg.sbeam_ini.name.replace(
                                  self.cfg.sbeam_ini.suffix,
-                                 f"_scan{0}{self.cfg.sbeam_ini.suffix}"
+                                 f"_scan{self.n_scan(scan)}{self.cfg.sbeam_ini.suffix}"
                              )
                          )
         shutil.copyfile(self.cfg.sbeam_ini, scan_sbeam_ini)
