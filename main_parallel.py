@@ -23,7 +23,6 @@ import farm.physics.astronomy as ast
 import farm.miscellaneous as misc
 from farm.miscellaneous import generate_random_chars as grc
 import farm.miscellaneous.error_handling as errh
-from farm.miscellaneous.image_functions import pb_multiply
 from farm.miscellaneous import plotting
 from farm.observing import Scan, Observation
 import farm.sky_model.tb_functions as tb_funcs
@@ -439,7 +438,7 @@ if not MODEL_ONLY:
     msg = 'Computed scan times are:\n'
     for idx, (start, end) in enumerate(scan_times):
         msg += (
-            f"\tScan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
+            f"--> Scan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
             f" to {end.strftime('%d%b%Y %H:%M:%S').upper()} "
             f"({(end - start).to_value('s'):.1f}s)")
         msg += '' if idx == (len(scan_times) - 1) else '\n'
@@ -549,8 +548,8 @@ def obs_loop(cfg, observation, scan):
     sky_model_pbcor = cfg.sky_model.image.stem
     sky_model_pbcor += f"_pbcor_scan{n_scan_str}.fits"
     sky_model_pbcor = cfg.output_dcy / sky_model_pbcor
-    pb_multiply(in_image=sky_model_mir_im, pb=scan_beam_fits,
-                out_fitsfile=sky_model_pbcor, cellscal='1/F')
+    observation.pb_multiply(in_image=sky_model_mir_im, pb=scan_beam_fits,
+                            out_fitsfile=sky_model_pbcor, cellscal='1/F')
     sky_model_pbcor_mirim = sky_model_pbcor.with_suffix('.mirim')
 
     scan_out_ms: pathlib.Path = cfg.root_name.append(

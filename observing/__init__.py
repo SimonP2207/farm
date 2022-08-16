@@ -409,3 +409,10 @@ class Observation:
         measurement_sets = [str(self.products[s]['MS']) for s in self.scans]
 
         casa.tasks.concat(vis=measurement_sets, concatvis=out_ms, timesort=True)
+
+    @staticmethod
+    def pb_multiply(in_image, pb, out_fitsfile, cellscal: str = 'CONSTANT'):
+        from ..miscellaneous.image_functions import pb_multiply
+
+        pb_multiply(in_image=in_image, pb=pb,
+                    out_fitsfile=out_fitsfile, cellscal=cellscal)
