@@ -5,7 +5,7 @@ import pandas as pd
 
 from . import loader
 
-__all__ = ['loader']
+__all__ = ['loader', 'FILES', 'DATA_FILE_DCY', 'ATEAM_DATA']
 
 
 def _iterate_through_dict(d: dict, operation: Callable) -> dict:
@@ -22,8 +22,9 @@ def _check_file_exists(f: Path):
         raise FileNotFoundError(f"{f} does not exist")
     return f
 
+DATA_DCY = Path(__file__).parent
+DATA_FILE_DCY = Path(__file__).parent / 'files'
 
-DATA_FILE_DCY = Path(__file__).parent.joinpath('files')
 FILES = {
     'EXAMPLE_CONFIG': 'example_config.toml',
     'IMAGES': {
@@ -34,6 +35,7 @@ FILES = {
         'ATEAM': 'ateam.data',
         'GLEAM': 'GLEAM_catalogue.fits',
         'LOBES': 'GLM_LoBESv2.osm',
+        'EOR_PARAMS': 'eor_param_data.json'
     },
 }
 

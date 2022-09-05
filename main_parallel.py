@@ -618,7 +618,9 @@ def obs_loop(cfg, observation, scan):
 
 
 scans = observation.scans
-Parallel(n_jobs=len(scans))(delayed(obs_loop)(cfg, observation, scan) for scan in scans)
+
+with Parallel(n_jobs=len(scans)) as parallel:
+    parallel(delayed(obs_loop)(cfg, observation, scan) for scan in scans)
 
 out_ms = cfg.root_name.append('.ms')
 observation.concat_scan_measurement_sets(out_ms)

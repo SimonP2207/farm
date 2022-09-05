@@ -72,6 +72,9 @@ pip install 'git+https://github.com/OxfordSKA/OSKAR.git@master#egg=oskarpy&subdi
 
 # Our fork of the ARatmospy repository for simulating the TEC screen
 pip install git+https://github.com/SimonP2207/ARatmospy
+
+# Our fork of tools21cm with modified tools21cm.angular_coordinates.observational_lightcone_to_physical method
+pip install git+https://github.com/SimonP2207/tools21cm.git
 ```
 
 ### A note on miriad and casa

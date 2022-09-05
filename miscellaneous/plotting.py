@@ -20,7 +20,8 @@ from ..data.loader import Telescope
 from .image_functions import calculate_spix
 from . import decorators
 
-SUBPLOT_WIDTH_INCHES = 3.32153
+COLUMN_WIDTH_INCHES = 3.32153
+PAGE_WIDTH_INCHES = 6.97522
 COLORBAR_WIDTH_FRAC = 0.1  # Colorbar width as percentage of parent axes
 
 assert 0 < COLORBAR_WIDTH_FRAC < 1, "Invalid fractional colorbar width"
@@ -108,9 +109,9 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
     if ax is None:
         plt.close('all')
         fig, ax = plt.subplots(1, 1,
-                               figsize=(SUBPLOT_WIDTH_INCHES /
+                               figsize=(COLUMN_WIDTH_INCHES /
                                         (1 + COLORBAR_WIDTH_FRAC),
-                                        SUBPLOT_WIDTH_INCHES))
+                                        COLUMN_WIDTH_INCHES))
     else:
         fig = ax.figure
 
@@ -246,8 +247,8 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES,
-                                              SUBPLOT_WIDTH_INCHES * 1.05))
+        fig, ax = plt.subplots(1, 1, figsize=(COLUMN_WIDTH_INCHES,
+                                              COLUMN_WIDTH_INCHES * 1.05))
     else:
         fig = ax.figure
 
@@ -331,8 +332,8 @@ def power_spectrum(sky_model_type: SkyClassType, freq: float,
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES,
-                                              SUBPLOT_WIDTH_INCHES* 1.05))
+        fig, ax = plt.subplots(1, 1, figsize=(COLUMN_WIDTH_INCHES,
+                                              COLUMN_WIDTH_INCHES * 1.05))
     else:
         fig = ax.figure
 
@@ -416,8 +417,8 @@ def target_altaz(t0: Time,
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES,
-                                              SUBPLOT_WIDTH_INCHES / 1.1))
+        fig, ax = plt.subplots(1, 1, figsize=(COLUMN_WIDTH_INCHES,
+                                              COLUMN_WIDTH_INCHES / 1.1))
     else:
         fig = ax.figure
 
@@ -542,8 +543,8 @@ def plot_dtec(
     plt.close('all')
 
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(SUBPLOT_WIDTH_INCHES * 2,
-                                              SUBPLOT_WIDTH_INCHES))
+        fig, ax = plt.subplots(1, 1, figsize=(COLUMN_WIDTH_INCHES * 2,
+                                              COLUMN_WIDTH_INCHES))
     else:
         fig = plt.gcf()
 
@@ -564,3 +565,161 @@ def plot_dtec(
         plt.savefig(savefig, dpi=300, bbox_inches='tight')
 
     return fig, ax
+
+
+def plot_lightcone(lightcone: npt.NDArray, loc_axis: npt.NDArray, fov: float,
+                   xlabel: str = 'z', ylabel: str = 'L (cMpc)',
+                   fig: Optional[plt.Figure] = None,
+                   ax: Optional[plt.Axes] = None,
+                   title: Optional[str] = None,
+                   savefig: Union[bool, pathlib.Path] = False):
+    """
+    Plot the Epoch of Reionisation's Hydrogen 21cm lightcone
+
+    Parameters
+    ----------
+    lightcone
+        Lightcone data
+    loc_axis
+        Line of sight axis (e.g. redshift) data
+    fov
+        Field of view [Mpc]
+    xlabel
+        Axis x-label
+    ylabel
+        Axis y-label
+    fig
+        matplotlib.pylab.Figure instance to plot to. If None, will create new
+        figure instance
+    ax
+        matplotlib.pylab.Axes instance to plot to. If None, will create new
+        axes instance
+    title
+        Plot title
+    savefig
+        Whether to save the plot. If False (default), will not save. Otherwise
+        must be the full path to the save file
+
+    Returns
+    -------
+    2-Tuple of (matplotlib.pylab.Figure instance,
+    matplotlib.pylab.Axes instance) plotted to
+    """
+    data = {'lc': lightcone, 'z': loc_axis}
+    xi = np.array([data['z'] for i in range(data['lc'].shape[1])])
+    yi = np.array(
+        [np.linspace(0, fov, data['lc'].shape[1]) for i in range(xi.shape[1])]
+    ).T
+    zj = (data['lc'][100, 1:, 1:] +
+          data['lc'][100, 1:, :-1] +
+          data['lc'][100, :-1, 1:] +
+          data['lc'][100, :-1, :-1]) / 4
+
+    if fig is None or ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(PAGE_WIDTH_INCHES,
+                                              PAGE_WIDTH_INCHES / 3.))
+
+    if title is not None:
+        ax.set_title(title)
+
+    im = ax.pcolor(xi, yi, zj, cmap='jet')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    if loc_axis[0] > loc_axis[-1]:
+        ax.invert_xaxis()
+
+    # ax.set_xticks(np.arange(6.5,13,1))
+    # ax.set_yticks(np.arange(0,350,100))
+    ax.tick_params(axis='both', which='major')
+    fig.subplots_adjust(bottom=0.11, right=0.91, top=0.95, left=0.06)
+    cax = plt.axes([0.92, 0.15, 0.02, 0.75])
+    fig.colorbar(im, cax=cax)
+
+    if savefig:
+        fig.savefig(savefig, dpi=300, bbox_inches='tight')
+
+    return fig, ax
+
+
+def cylindrical_power_spectrum(image: pathlib.Path, psf: pathlib.Path,
+                               axes: Optional[Tuple[plt.Axes, plt.Axes]] = None,
+                               savefig: Union[bool, pathlib.Path] = False,
+                               savedata: bool = False):
+    """
+    Florent's routine to compute cylindrical power spectrum from observational
+    data
+
+    Parameters
+    ----------
+    image
+    psf
+    axes
+    savefig
+    savedata
+
+    Returns
+    -------
+
+    """
+    from ps_eor.datacube import CartDataCube, WindowFunction
+    from ps_eor.pspec import PowerSpectraBuilder, PowerSpectraCart
+
+    fov_deg = 4.
+    t_int = 10
+    t_total = 3600 * 4
+    u_min = 30
+    u_max = 400
+    freq_range_mhz = [100, 200]
+
+    fov_rad = np.radians(fov_deg)
+
+    data_cube = CartDataCube.load_from_fits_image_and_psf(
+        [image], [psf], u_min, u_max, fov_rad, int_time=t_int,
+        total_time=t_total, window_function=WindowFunction('tukey', 0.2)
+    )
+
+    ps_builder = PowerSpectraBuilder()
+
+    ps_gen: PowerSpectraCart = ps_builder.get(
+        data_cube, fmhz_range=freq_range_mhz, rmean_freqs=False, umax=300,
+        umin=30, du=8, window_fct='blackmanharris', primary_beam='ska_low'
+    )
+
+    if axes is None or any([ax is None for ax in axes]):
+        fig, (ax1, ax2) = plt.subplots(ncols=2, nrows=1,
+                                       figsize=(PAGE_WIDTH_INCHES,
+                                                PAGE_WIDTH_INCHES * 5 / 12))
+    else:
+        ax1, ax2 = axes
+        fig = ax1.figure
+
+    # Spatial power spectra of data_cube
+    spatial_ps = ps_gen.get_ps(data_cube)
+    spatial_ps.plot(
+        ax=ax1, title='Power-spectra as function of frequency'
+    )
+
+    # Return cylindrically averaged power spectra of data_cube. Wedge lines are
+    # delay lines for a source at theta degrees from the phase centre (Dillon
+    # 2013)
+    cylindrical_ps = ps_gen.get_ps2d(data_cube)
+    cylindrical_ps.plot(
+        ax=ax2, title='Cylindrically averaged PS', wedge_lines=[fov_deg, 90],
+        z=ps_gen.eor.z
+    )
+
+    fig.tight_layout()
+
+    if savefig:
+        fig.savefig(savefig, dpi=300, bbox_inches='tight')
+
+    if savedata:
+        suffix = f"_u{ps_gen.config.get('umin'):.0f}-{ps_gen.config.get('umax'):.0f}_fov4_pb38m"
+        spatial_ps.save_to_txt(
+            f'{savedata}_angular_power_spectra_from_images{suffix}.data'
+        )
+        cylindrical_ps.save_to_txt(
+            f'{savedata}_2D_power_spectra_from_images{suffix}.data'
+        )
+
