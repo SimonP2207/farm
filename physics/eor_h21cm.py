@@ -12,13 +12,15 @@ from astropy.io import fits
 import py21cmfast as p21c
 import tools21cm as t2c
 
-logger = logging.getLogger("21cmFAST")
-logger.setLevel(logging.INFO)
 
 if __name__ == '__main__':
     from farm.miscellaneous.plotting import plot_lightcone as plot_lc
+    from farm import LOG_FMT, LOG_DATE_FMT
+    LOGGER = logging.getLogger()
+    LOGGER.setLevel(logging.INFO)
 else:
     from ..miscellaneous.plotting import plot_lightcone as plot_lc
+    from .. import LOGGER, LOG_FMT, LOG_DATE_FMT
 
 
 def z_from_freq(nu):
@@ -37,12 +39,36 @@ def create_eor_h21cm_fits(params_file: str):
     params_file
         Full path to .toml configuration file for producing the .fits cube
     """
+    from datetime import datetime
+
     with open(params_file, 'rt') as f:
         params = toml.load(f)
+
+    output_dir = params['output']['output_dcy'].rstrip('/')
+    # ######################################################################## #
+    # ######################## Set up the logger ############################# #
+    # ######################################################################## #
+    pipeline_start = datetime.now()
+    logfile_name = f'EoR_H21cm_{pipeline_start.strftime("%Y%b%d_%H%M%S").upper()}.log'
+    logfile = f"{output_dir}{os.sep}{logfile_name}"
+    LOGGER.setLevel(logging.DEBUG)
+
+    # Set up handler for writing log messages to log file
+    file_handler = logging.FileHandler(
+        str(logfile), mode="w", encoding=sys.stdout.encoding
+    )
+    log_formatter = logging.Formatter(LOG_FMT, datefmt=LOG_DATE_FMT)
+    file_handler.setFormatter(log_formatter)
+    LOGGER.addHandler(file_handler)
+
+    # Set up handler to print to console
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(log_formatter)
+    console_handler.setLevel(LOG_LEVEL)
+    LOGGER.addHandler(console_handler)
     # ######################################################################## #
     # ###################### Parse configuration from file ################### #
     # ######################################################################## #
-    output_dir = params['output']['output_dcy'].rstrip('/')
     output_fits = f"{output_dir}{os.sep}{params['output']['root_name']}.fits"
     random_seed = params['user_params']['seed']
     ra_deg = params['field']['ra0']  # [deg]
@@ -95,16 +121,18 @@ def create_eor_h21cm_fits(params_file: str):
     p21c.config['direc'] = cache_dir
 
     # clear the cache so that we get the same result each time
+    LOGGER.info("Clearing the cache")
     p21c.cache_tools.clear_cache(direc=cache_dir)
     # ######################################################################## #
     # ###################### Parse configuration from file ################### #
     # ######################################################################## #
+    LOGGER.info("Computing initial conditions")
     initial_conditions = p21c.initial_conditions(
         user_params=user_params, random_seed=random_seed, direc=output_dir,
     )
 
     lightcone_quantities = ('brightness_temp',)
-
+    LOGGER.info("Generating lightcone")
     lightcone = p21c.run_lightcone(
         redshift=zmin,
         # max_redshift = 10.0,
@@ -129,27 +157,26 @@ def create_eor_h21cm_fits(params_file: str):
 
     # plotting physical lightcone
     if plot_light_cone:
+        output_png = output_fits.replace('.fits', '.png')
+        LOGGER.info(f"Plotting lightcone and saving to {output_png}")
         plot_lc(lc, zs, fov=BOX_LEN, title='Physical lightcone', xlabel='z',
-                ylabel='L (cMpc)',
-                savefig=output_fits.replace('.fits', '.png'))
+                ylabel='L (cMpc)', savefig=output_png)
 
     # converting physical to observational coordinates - given cosmology is
     # different here
     angular_size_deg = t2c.angular_size_comoving(BOX_LEN, zs)
-    print('Minimum angular size: {:.2f} degrees'.format(angular_size_deg.min()))
-    print('Maximum angular size: {:.2f} degrees'.format(angular_size_deg.max()))
+    LOGGER.info('Minimum angular size: {:.2f} degrees'.format(angular_size_deg.min()))
+    LOGGER.info('Maximum angular size: {:.2f} degrees'.format(angular_size_deg.max()))
 
     physical_freq = t2c.z_to_nu(zs)  # redshift to frequencies in MHz
 
-    logger.info(
-        'Minimum frequency gap in the physical light-cone data: {:.2f} MHz'.format(
-            np.abs(np.gradient(physical_freq)).min()
-        )
+    LOGGER.info(
+        'Minimum frequency gap in the physical light-cone data: '
+        '{:.2f} MHz'.format(np.abs(np.gradient(physical_freq)).min())
     )
-    logger.info(
-        'Maximum frequency gap in the physical light-cone data: {:.2f} MHz'.format(
-            np.abs(np.gradient(physical_freq)).max()
-        )
+    LOGGER.info(
+        'Maximum frequency gap in the physical light-cone data: '
+        '{:.2f} MHz'.format(np.abs(np.gradient(physical_freq)).max())
     )
 
     zmin = zs.min()
@@ -158,6 +185,7 @@ def create_eor_h21cm_fits(params_file: str):
     # Original physical_lightcone_to_observational padded highest redshifts by
     # repeating flux distribution. AB + EL didn't like that, and changed it to
     # trim whilst starting with a bigger cube.
+    LOGGER.info("Converting physical lightcone to observational")
     obs_lc, obs_freq = t2c.physical_lightcone_to_observational(
         lc, zmin, zmax, dfreq / 1e6, output_dtheta, input_box_size_mpc=BOX_LEN
     )  # Mpc * Mpc * Mpc to deg * deg * Hz
@@ -186,6 +214,7 @@ def create_eor_h21cm_fits(params_file: str):
     hdul[0].header.set('CUNIT3', 'Hz      ')
     hdul[0].header.set('BUNIT', 'K       ')
 
+    LOGGER.info(f"Writing output lightcone to {output_fits}")
     hdul.writeto(output_fits, overwrite=True)
 
 
