@@ -163,9 +163,12 @@ def create_eor_h21cm_fits(params_file: str):
     if plot_light_cone:
         output_png = output_fits.replace('.fits', '.png')
         LOGGER.info(f"Plotting lightcone and saving to {output_png}")
-        plot_lc(lc, zs, fov=BOX_LEN, title='Physical lightcone', xlabel='z',
-                ylabel='L (cMpc)', savefig=output_png)
-
+        try:
+            plot_lc(lc, zs, fov=BOX_LEN, title='Physical lightcone', xlabel='z',
+                    ylabel='L (cMpc)', savefig=output_png)
+        except Exception as e:
+            LOGGER.error(f"{e.__class__.__name__}: {e}")
+            LOGGER.error("Could not plot lightcone")
     # converting physical to observational coordinates - given cosmology is
     # different here
     angular_size_deg = t2c.angular_size_comoving(BOX_LEN, zs)
