@@ -715,7 +715,9 @@ def cylindrical_power_spectrum(image: pathlib.Path, psf: pathlib.Path,
         fig.savefig(savefig, dpi=300, bbox_inches='tight')
 
     if savedata:
-        suffix = f"_u{ps_gen.config.get('umin'):.0f}-{ps_gen.config.get('umax'):.0f}_fov4_pb38m"
+        suffix = f"_u{ps_gen.config.get('umin'):.0f}-" \
+                 f"{ps_gen.config.get('umax'):.0f}_" \
+                 f"fov{fov_deg:.0f}_pb38m"
         spatial_ps.save_to_txt(
             f'{savedata}_angular_power_spectra_from_images{suffix}.data'
         )

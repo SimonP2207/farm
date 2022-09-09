@@ -633,7 +633,7 @@ def eor_flags(master: Type[tk.Frame]) -> Section:
         default=False
     )
 
-    eor_flags.fields['USE_PHOTON_CONS'] = CheckbuttonField(
+    eor_flags.fields['PHOTON_CONS'] = CheckbuttonField(
         master=eor_flags.content_frame,
         text="Correct for photon non-conservation?",
         hint="Whether to perform a small correction to account for the "
