@@ -631,7 +631,7 @@ class _BaseSkyClass(ABC):
         return hdr2d_from_skymodel(self)
 
     @abstractmethod
-    def t_b(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
+    def t_b(self, freq: Union[float, npt.ArrayLike]) -> npt.NDArray:
         """
         Calculate brightness temperature distribution [K]
 
@@ -645,7 +645,7 @@ class _BaseSkyClass(ABC):
         np.ndarray of brightness temperatures with shape (self.n_x, self.n_y)
         """
 
-    def i_nu(self, freq: Union[float, npt.ArrayLike]) -> np.ndarray:
+    def i_nu(self, freq: Union[float, npt.ArrayLike]) -> npt.NDArray:
         """
         Calculate intensity sky distribution [Jy/sr]
 
@@ -662,7 +662,7 @@ class _BaseSkyClass(ABC):
 
         return ast.tb_to_intensity(self.t_b(freq), freq)
 
-    def flux_nu(self, freq: Union[float, npt.ArrayLike]):
+    def flux_nu(self, freq: Union[float, npt.ArrayLike]) -> npt.NDArray:
         """
         Calculate fluxes sky distribution [Jy/pixel]
 

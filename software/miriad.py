@@ -21,10 +21,18 @@ from ..miscellaneous import error_handling as errh, decorators
 MIR_CHAR_LIMIT = 64
 LONG_KEYS = ('tin', 'out', 'vis', 'model')
 
-if sfuncs.which('miriad') is None:
+MIR_EXEC = sfuncs.which('miriad')
+if MIR_EXEC is None:
     errh.raise_error(ImportError, "miriad is not in your PATH")
-
-
+# else:
+#     from pathlib import Path
+#
+#     MIR_EXEC = Path(MIR_EXEC)
+#     MIR_PATH = MIR_EXEC.parent.parent.parent
+#     os.system("echo $LD_LIBRARY_PATH")
+#     os.system(f"source {MIR_PATH / 'MIRRC.sh'}")
+#     os.system("echo $LD_LIBRARY_PATH")
+os.system("echo $LD_LIBRARY_PATH")
 def mir_commands():
     """Get a filter list of miriad commands in the miriad bin directory"""
     mir = sfuncs.which('miriad')

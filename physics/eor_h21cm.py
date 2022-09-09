@@ -99,6 +99,8 @@ def create_eor_h21cm_fits(params_file: str):
     # Length of the box in Mpc (simulation size) i.e. the comoving size
     BOX_LEN = fov_mpc
 
+    flag_options = params['flags']
+
     user_params : dict = params["user_params"]
     user_params['N_THREADS'] = params['user_params']['n_cpu']
     user_params["HII_DIM"]= HII_DIM
@@ -108,7 +110,9 @@ def create_eor_h21cm_fits(params_file: str):
     user_params.pop('n_cpu')
     user_params.pop('seed')
 
-    flag_options = params['flags']
+    if flag_options['USE_MINI_HALOS']:
+        user_params['USE_RELATIVE_VELOCITIES'] = True
+
     # ######################################################################## #
     # ###################### Create relevant directories ##################### #
     # ######################################################################## #
