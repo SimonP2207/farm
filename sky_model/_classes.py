@@ -13,6 +13,7 @@ import numpy.typing as npt
 import numpy as np
 import pandas as pd
 import astropy.units as u
+import scipy.signal
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.io.fits import Header
@@ -103,7 +104,7 @@ class _BaseSkyClass(ABC):
         Field-of-view's central coordinate
     """
     _FREQ_TOL = 1.
-    VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR')
+    VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR', 'JY/BEAM')
 
     @classmethod
     def load_from_oskar_sky_model(cls, osmfile: pathlib.Path,
@@ -682,7 +683,9 @@ class _BaseSkyClass(ABC):
         return ast.intensity_to_flux(self.i_nu(freq), solid_angle)
 
     @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
-    def write_fits(self, fits_file: pathlib.Path, unit: str):
+    def write_fits(self, fits_file: pathlib.Path, unit: str,
+                   beam: Optional[Tuple[float, float]] = None,
+                   convolve: bool = False):
         """
         Write .fits cube of intensities or brightness temperatures
 
@@ -692,6 +695,11 @@ class _BaseSkyClass(ABC):
             Full path to write .fits file to
         unit
             One of {0}
+        beam
+            Beam major FWHM [arcsec], minor FWHM [arcsec] and position angle
+            [deg] as a 3-tuple. Only needed if unit is JY/BEAM
+        convolve
+            Whether to convolve the data by the given beam. Default is False
 
         Returns
         -------
@@ -703,7 +711,8 @@ class _BaseSkyClass(ABC):
             When supplied unit is not one of {0}
         """
         from .. import LOGGER
-
+        # TODO: Implement convolution by the beam, if requested. Use
+        #  scipy.signal.convolve2d
         LOGGER.info(f"Generating .fits file, {str(fits_file)}")
 
         if unit not in self.VALID_UNITS:
@@ -711,9 +720,85 @@ class _BaseSkyClass(ABC):
                       f"{str(self.VALID_UNITS)[1:-1]}"
             errh.raise_error(ValueError, err_msg)
 
-        gsmhdu = fits.PrimaryHDU(self.data(unit=unit))
         hdr = self.header
         hdr.set('BUNIT', format(unit, '8'))
+
+        if unit == 'JY/BEAM':
+            if beam is None or len(beam) != 3:
+                errh.raise_error(
+                    ValueError,
+                    f"Beam must be 3-tuple of (BMAJ, BMIN, BPA) , not '{beam}'"
+                )
+            gsmhdu = fits.PrimaryHDU(self.data(unit='JY/SR'))
+            solid_angle_beam = beam[0] * beam[1] * 2.663263603293828e-11  # sr
+            gsmhdu.data *= solid_angle_beam
+            hdr.set('BMAJ', beam[0] / 3600.)
+            hdr.set('BMIN', beam[1] / 3600.)
+            hdr.set('BPA', beam[2])
+
+            if convolve:
+                # TODO: Move the below code to a sensible module
+                def fwhm_to_sd(fwhm):
+                    """FWHM to standard deviation for a Gaussian distribution"""
+                    return fwhm / (2. * np.sqrt(2. * np.log(2.)))
+
+                def gaussian2d(x, y, x0, y0, amp, sx, sy, pa):
+                    """
+                    2D Gaussian distribution
+
+                    Parameters
+                    ----------
+                    x
+                        x-coordinate to calculate function at
+                    y
+                        y-coordinate to calculate function at
+                    x0
+                        x-coordinate of Gaussian peak
+                    y0
+                        y-coordinate of Gaussian peak
+                    amp
+                        Peak value of Gaussian
+                    sx
+                        Standard deviation in x
+                    sy
+                        Standard deviation in y
+                    pa
+                        Position angle of Gaussian major axis [deg]
+
+                    Returns
+                    -------
+                    f(x,y)
+                    """
+                    cospasq, sinpasq = np.cos(pa) ** 2., np.sin(pa) ** 2.
+                    sin2pa = np.sin(2. * pa)
+
+                    a = cospasq / (2. * sx ** 2.) + sinpasq / (2. * sy ** 2.)
+                    b = sin2pa / (4. * sx ** 2.) - sin2pa / (4. * sy ** 2.)
+                    c = sinpasq / (2. * sx ** 2.) + cospasq / (2. * sy ** 2.)
+
+                    return amp * np.exp(-(
+                                a * (x - x0) ** 2 + 2. * b * (x - x0) * (
+                                    y - y0) + c * (y - y0) ** 2.))
+
+                xy_max = beam[0] * 2 / 3600.
+
+                sx, sy = fwhm_to_sd(beam[0] / 3600), fwhm_to_sd(beam[1] / 3600)
+                nxy = np.ceil(xy_max / self.cdelt)
+
+                xy_pix = np.arange(-nxy, nxy, 1)
+                xy = xy_pix * self.cdelt
+                response = gaussian2d(xy[:, np.newaxis], xy[np.newaxis, :],
+                                      0., 0., 1., sx, sy, np.radians(beam[2]))
+                response /= np.nansum(response)
+
+                for idx in range(len(gsmhdu.data)):
+                    gsmhdu.data[idx] = scipy.signal.convolve2d(
+                        gsmhdu.data[idx], response, mode='same'
+                    )
+
+        else:
+            gsmhdu = fits.PrimaryHDU(self.data(unit=unit))
+
         gsmhdu.header = hdr
 
         if fits_file.exists():
@@ -830,6 +915,7 @@ class _BaseSkyClass(ABC):
                 temporary_image.unlink()
 
         regridded_input_skyclass = copy.deepcopy(self)
+        regridded_input_skyclass.coord0 = regridded_input_temp.coord0
         regridded_input_skyclass.n_x = regridded_input_temp.n_x
         regridded_input_skyclass.n_y = regridded_input_temp.n_y
         regridded_input_skyclass.cdelt = regridded_input_temp.cdelt
@@ -905,22 +991,44 @@ class _BaseSkyClass(ABC):
         True if similar header information, False otherwise
         """
         if self.n_x != other.n_x:
+            errh.issue_warning(UserWarning,
+                               "n_x not matching for self and other, i.e. "
+                               f"{self.n_x} != {other.n_x}")
             return False
         if self.n_y != other.n_y:
+            errh.issue_warning(UserWarning,
+                               "n_y not matching for self and other, i.e. "
+                               f"{self.n_y} != {other.n_y}")
             return False
         if not all([other.frequency_present(f) for f in self.frequencies]):
+            errh.issue_warning(UserWarning,
+                               "frequencies not matching for self and other, "
+                               f"i.e. {self.frequencies} != "
+                               f"{other.frequencies}")
             return False
 
         rel_pix_tol = 0.5 / max([self.n_x, self.n_y])
         if not math.isclose(self.cdelt, other.cdelt, rel_tol=rel_pix_tol):
+            errh.issue_warning(UserWarning,
+                               "cdelt not matching for self and other, i.e. "
+                               f"{self.cdelt} != {other.cdelt}")
             return False
 
         if not math.isclose(self.coord0.ra.deg, other.coord0.ra.deg,
                             rel_tol=rel_pix_tol):
+            errh.issue_warning(UserWarning,
+                               "Central RA coordinate not matching for self and"
+                               f"other, i.e.{self.coord0.ra.deg:.5f}deg != "
+                               f"{other.coord0.ra.deg:.5f}deg")
             return False
 
         if not math.isclose(self.coord0.dec.deg, other.coord0.dec.deg,
                             rel_tol=rel_pix_tol):
+            errh.issue_warning(UserWarning,
+                               "Central Dec coordinate not matching for self "
+                               f"and other, i.e."
+                               f"{self.coord0.dec.deg:.5f}deg != "
+                               f"{other.coord0.dec.deg:.5f}deg")
             return False
 
         return True

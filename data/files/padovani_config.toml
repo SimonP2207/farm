@@ -1,0 +1,93 @@
+[directories]
+  root_name = "example_1"  # root name for all output files (not directory)
+  telescope_model = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/V512/telescope.tm"
+  output_dcy = "/Users/simon.purser/Desktop/test_output_farm"
+
+# observation not yet incorporated in to FARM
+[observation]
+  time = 2027-01-01T10:00:01  # Start time (UTC) YYYY-MM-DDTHH:MM:SS
+  t_total = 28800  # Total on source time [s]
+  n_scan = 8  # Number of observational 'scans' of target field
+  min_gap_scan = 600  # Minimum time-gap between consecutive scans [s]
+  min_elevation = 30.0  # Minimum elevation [deg]
+
+  [observation.field]
+    ra0 = "00:00:00.0"  # HH:MM:SS.S
+    dec0 = "-30:00:00.00"  # DD:MM:SS.SS
+    frame = "fk5"  # Astropy-compatible frame string e.g. fk4, fk5, galactic etc
+    nxpix = 14400  # Number of pixels in x/right ascension
+    nypix = 14400  # Number of pixels in y/declination
+    cdelt = 2.0  # arcsec
+
+  [observation.correlator]
+    freq_min = 120e6  # Hz
+    freq_max = 168e6  # Hz
+    nchan = 241  # Number of evenly spaced channels across whole bandwidth, int
+    chanwidth = 0.2e6  # channel bandwidth for smearing calculation, Hz
+    t_int = 8.0  # visibility integration time, s
+
+# calibration not yet incorporated in to FARM
+[calibration]
+  [calibration.noise]
+    include = true
+    seed = 12345  # Random number seed for thermal noise calculation
+    sefd_frequencies_file = "/Users/simon.purser/Desktop/LOFAR/telescope.tm/noise_frequencies.txt"
+    sefd_file = "/Users/simon.purser/Desktop/LOFAR/telescope.tm/rms.txt"
+  [calibration.TEC]
+    include = true
+    create = true
+    image = []
+    residual_error = 0.01
+  [calibration.gains]
+    include = true
+    phase_err = 0.1  # Residual phase error [deg]
+    amp_err = 0.1  # Residual amplitude error [%]
+  [calibration.DD-effects]
+    include = false
+
+[sky_models]
+  [sky_models.21cm]
+    include = false
+    create = false
+    image = ""
+
+  [sky_models.A-Team]
+    include = true
+    demix_error = 0.001  # Factor of imperfect demixing of A-team sources
+
+  [sky_models.Galactic]
+    include = true
+    image = ""
+
+    [sky_models.Galactic.LargeScale]
+      include = false
+      create = true
+      image = ""
+
+    [sky_models.Galactic.SmallScale]
+        include = true
+        create = false
+        image = "/Users/simon.purser/pylib/farm/data/files/Gsynch_SKAs.fits"
+
+  [sky_models.EG]  # Extragalactic foregrounds
+    include = true
+    image = ""
+    flux_inner = 10.0  # flux cutoff (ceil) within fov fov_deg, Jy
+    flux_outer = 100.0  # flux cutoff (floor) beyond radius of fov_deg, Jy
+    flux_transition = 0.2  # lower flux cutoff for known sources/upper flux cutoff for T-RECS sources
+
+    [sky_models.EG.Known]
+      include = true
+      image = "/Users/simon.purser/pylib/farm/data/files/GLM_LoBESv2.osm"  # fits image or table
+
+    [sky_models.EG.TRECS]
+      include = false
+      create = false
+      image = "/Users/simon.purser/pylib/farm/data/files/sky_continuum_sdc3_v1_1.fits"  # fits image or table
+
+[wsclean]
+  taper-gaussian = 60  # arcsec
+  weight = 'uniform'
+  super-weight = 4
+  niter = 10000
+  pol = 'xx'

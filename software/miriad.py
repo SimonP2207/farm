@@ -32,7 +32,7 @@ if MIR_EXEC is None:
 #     os.system("echo $LD_LIBRARY_PATH")
 #     os.system(f"source {MIR_PATH / 'MIRRC.sh'}")
 #     os.system("echo $LD_LIBRARY_PATH")
-os.system("echo $LD_LIBRARY_PATH")
+
 def mir_commands():
     """Get a filter list of miriad commands in the miriad bin directory"""
     mir = sfuncs.which('miriad')

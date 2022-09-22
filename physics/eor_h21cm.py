@@ -220,7 +220,6 @@ def create_eor_h21cm_fits(params_file: str):
     hdul[0].header.set('CUNIT2', 'deg     ')
     hdul[0].header.set('CUNIT3', 'Hz      ')
     hdul[0].header.set('BUNIT', 'K       ')
-
     LOGGER.info(f"Writing output lightcone to {output_fits}")
     hdul.writeto(output_fits, overwrite=True)
 
@@ -245,7 +244,7 @@ if __name__ == '__main__':
         params_file = pathlib.Path(args.params_file)
         LOG_LEVEL = logging.DEBUG if args.debug else logging.INFO
     else:
-        params_file = pathlib.Path('/Users/simon.purser/EoR_H21cm.toml')
+        params_file = pathlib.Path('/Users/simon.purser/EoR_H21cm_v3.toml')
         LOG_LEVEL = logging.DEBUG
 
     create_eor_h21cm_fits(params_file)
