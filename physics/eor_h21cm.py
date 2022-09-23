@@ -243,9 +243,12 @@ if __name__ == '__main__':
                             action="store_true")
         args = parser.parse_args()
         params_file = pathlib.Path(args.params_file)
+
+        if not params_file.exists():
+            raise FileNotFoundError(f"{params_file} does not exist")
+
         LOG_LEVEL = logging.DEBUG if args.debug else logging.INFO
     else:
-        params_file = pathlib.Path('/data-cold/for-backup/sdc/SDC3/foregrounds/EoR_lightcones/v4/EoR_H21cm_v4.toml')
-        LOG_LEVEL = logging.DEBUG
+        raise RuntimeError("No parameter file specified")
 
     create_eor_h21cm_fits(params_file)
