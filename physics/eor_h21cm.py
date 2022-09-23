@@ -213,7 +213,7 @@ def create_eor_h21cm_fits(params_file: str):
     hdul[0].header.set('CRPIX1', HII_DIM / 2.)
     hdul[0].header.set('CRPIX2', HII_DIM / 2.)
     hdul[0].header.set('CRPIX3', 1)
-    hdul[0].header.set('CDELT1', fov_deg / HII_DIM)
+    hdul[0].header.set('CDELT1', -fov_deg / HII_DIM)
     hdul[0].header.set('CDELT2', fov_deg / HII_DIM)
     hdul[0].header.set('CDELT3', dfreq)
     hdul[0].header.set('CUNIT1', 'deg     ')
