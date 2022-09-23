@@ -16,3 +16,4 @@ test.py
 test2.py
 sky_modeller.py
 .DS_Store
+physics/eor_21cm_load.py
