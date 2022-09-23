@@ -77,9 +77,8 @@ def create_eor_h21cm_fits(params_file: str):
     freqs = np.linspace(params['correlator']['freq_min'],
                         params['correlator']['freq_max'],
                         params['correlator']['nchan'])
-    cdelt = params['field']['cdelt']
-    n_output_cell = int(fov_deg / cdelt) + 1
-    plot_light_cone = True
+    n_output_cell = params['field']['n_cells']
+    plot_light_cone = params['user_params']['plot_lc']
 
     # Number of cells per side for the low res box (output cube)
     HII_DIM = n_output_cell
@@ -109,6 +108,7 @@ def create_eor_h21cm_fits(params_file: str):
 
     user_params.pop('n_cpu')
     user_params.pop('seed')
+    user_params.pop('plot_lc')
 
     if flag_options['USE_MINI_HALOS']:
         user_params['USE_RELATIVE_VELOCITIES'] = True
@@ -210,16 +210,17 @@ def create_eor_h21cm_fits(params_file: str):
     hdul[0].header.set('CRVAL1', ra_deg)
     hdul[0].header.set('CRVAL2', dec_deg)
     hdul[0].header.set('CRVAL3', np.min(freqs))
-    hdul[0].header.set('CRPIX1', HII_DIM / 2.)
+    hdul[0].header.set('CRPIX1', -HII_DIM / 2.)
     hdul[0].header.set('CRPIX2', HII_DIM / 2.)
     hdul[0].header.set('CRPIX3', 1)
-    hdul[0].header.set('CDELT1', -fov_deg / HII_DIM)
+    hdul[0].header.set('CDELT1', fov_deg / HII_DIM)
     hdul[0].header.set('CDELT2', fov_deg / HII_DIM)
     hdul[0].header.set('CDELT3', dfreq)
     hdul[0].header.set('CUNIT1', 'deg     ')
     hdul[0].header.set('CUNIT2', 'deg     ')
     hdul[0].header.set('CUNIT3', 'Hz      ')
     hdul[0].header.set('BUNIT', 'K       ')
+
     LOGGER.info(f"Writing output lightcone to {output_fits}")
     hdul.writeto(output_fits, overwrite=True)
 
@@ -244,7 +245,7 @@ if __name__ == '__main__':
         params_file = pathlib.Path(args.params_file)
         LOG_LEVEL = logging.DEBUG if args.debug else logging.INFO
     else:
-        params_file = pathlib.Path('/Users/simon.purser/EoR_H21cm_v3.toml')
+        params_file = pathlib.Path('/data-cold/for-backup/sdc/SDC3/foregrounds/EoR_lightcones/v4/EoR_H21cm_v4.toml')
         LOG_LEVEL = logging.DEBUG
 
     create_eor_h21cm_fits(params_file)
