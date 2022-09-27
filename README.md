@@ -17,6 +17,7 @@
 - [reproject](https://reproject.readthedocs.io/en/stable/) (developed with v0.8)
 - [scipy](https://scipy.org/) (developed with v1.7.3)
 - [toml](https://github.com/uiri/toml) (developed with v0.10.2)
+- [tools21cm](https://github.com/SimonP2207/tools21cm.git) (developed with custom fork)
 
 ### System
 - [casa](https://casa.nrao.edu/) (developed with v6.4.0.16)
@@ -35,7 +36,7 @@ conda create -n farm python>3.8
 conda activate farm
 
 # General package requirements
-conda install astropy gsl h5py jupyter matplotlib numpy pandas scipy toml reproject
+conda install pip git astropy gsl h5py jupyter matplotlib numpy pandas scipy toml reproject
 
 # Installation of reproject can fail, in which case:
 conda install -c conda-forge reproject
@@ -48,7 +49,6 @@ conda install -c conda-forge 21cmFAST
 
 # powerbox
 conda install -c conda-forge pyfftw
-conda install pip git
 pip install git+git://github.com/steven-murray/powerbox.git
 
 # Global diffuse sky model
@@ -59,6 +59,9 @@ pip install 'git+https://github.com/OxfordSKA/OSKAR.git@master#egg=oskarpy&subdi
 
 # Our fork of the ARatmospy repository for simulating the TEC screen
 pip install git+https://github.com/SimonP2207/ARatmospy
+
+# Our fork of tools21cm
+pip install git+https://github.com/SimonP2207/tools21cm.git
 ```
 
 ### A note on miriad and casa
