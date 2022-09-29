@@ -17,3 +17,5 @@ test2.py
 sky_modeller.py
 .DS_Store
 physics/eor_21cm_load.py
+eor_21cm_load.py
+lofar_telescope_cfg_to_oskar_telescope.py

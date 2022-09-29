@@ -77,7 +77,7 @@ def create_eor_h21cm_fits(params_file: str):
     freqs = np.linspace(params['correlator']['freq_min'],
                         params['correlator']['freq_max'],
                         params['correlator']['nchan'])
-    n_output_cell = params['field']['n_cells']
+    n_output_cell = params['field']['n_cell']
     plot_light_cone = params['user_params']['plot_lc']
 
     # Number of cells per side for the low res box (output cube)
@@ -198,7 +198,7 @@ def create_eor_h21cm_fits(params_file: str):
     )  # Mpc * Mpc * Mpc to deg * deg * Hz
 
     # save to a fits file
-    lc_out = np.float32(obs_lc.transpose())
+    lc_out = np.float32(obs_lc.transpose()[::-1])
     lc_out /= 1000.  # mK to K
 
     hdu = fits.PrimaryHDU(lc_out)
@@ -210,10 +210,10 @@ def create_eor_h21cm_fits(params_file: str):
     hdul[0].header.set('CRVAL1', ra_deg)
     hdul[0].header.set('CRVAL2', dec_deg)
     hdul[0].header.set('CRVAL3', np.min(freqs))
-    hdul[0].header.set('CRPIX1', -HII_DIM / 2.)
+    hdul[0].header.set('CRPIX1', HII_DIM / 2.)
     hdul[0].header.set('CRPIX2', HII_DIM / 2.)
     hdul[0].header.set('CRPIX3', 1)
-    hdul[0].header.set('CDELT1', fov_deg / HII_DIM)
+    hdul[0].header.set('CDELT1', -fov_deg / HII_DIM)
     hdul[0].header.set('CDELT2', fov_deg / HII_DIM)
     hdul[0].header.set('CDELT3', dfreq)
     hdul[0].header.set('CUNIT1', 'deg     ')

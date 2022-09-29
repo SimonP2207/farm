@@ -109,6 +109,33 @@ class EoRH21cmOptions(PipelineOptions):
             section.build()
             section.pack(fill='x')
 
+        # TODO: Find place for the below code within sections.field function and
+        #  EntryField class
+        def update_cdelt(event: tk.Event):
+            try:
+                new_val = (self.sections['field'].fields['fov'].value /
+                           self.sections['field'].fields['n_cell'].value)
+
+                self.sections['field'].fields['cdelt'].var.set(new_val)
+            except ZeroDivisionError:
+                self.sections['field'].fields['cdelt'].var.set(0.)
+
+        def update_ncell(event: tk.Event):
+            try:
+                new_val = int(self.sections['field'].fields['fov'].value /
+                              self.sections['field'].fields['cdelt'].value)
+                self.sections['field'].fields['n_cell'].var.set(new_val)
+            except ZeroDivisionError:
+                pass
+            finally:
+                update_cdelt(event)
+
+        self.sections['field'].fields['cdelt'].entry.bind("<FocusOut>",
+                                                          update_ncell)
+
+        self.sections['field'].fields['n_cell'].entry.bind("<FocusOut>",
+                                                           update_cdelt)
+
     def run(self):
         from ...physics.eor_h21cm import create_eor_h21cm_fits
 
