@@ -581,6 +581,12 @@ def eor_user_params(master: Type[tk.Frame]) -> Section:
         default=True
     )
 
+    params.fields['plot_lc'] = CheckbuttonField(
+        master=params.content_frame, text="Plot lightcone?",
+        hint="Whether to plot the lightcone or not",
+        default=True
+    )
+
     return params
 
 
