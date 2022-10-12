@@ -456,6 +456,7 @@ tecscreen = None
 if cfg.calibration.tec and not MODEL_ONLY:
     if cfg.calibration.tec.create:
         if not DRY_RUN:
+            # TODO: Hard-coded values here
             r0 = 1e4
             speed = 150e3 / 3600
             alpha_mag = 0.999
@@ -536,8 +537,7 @@ for scan in observation.scans:
 
     if tecscreen:
         scan_tec_fits = cfg.root_name.append(f'_TEC_{n_scan_str}.fits')
-        observation.get_scan_tec_screen_slice(tecscreen, scan,
-                                              scan_tec_fits)
+        observation.get_scan_tec_screen_slice(tecscreen, scan, scan_tec_fits)
 
     # For the image based model cube, it is first necessary to regrid in a
     # way that will allow a single (u,v) grid to represent the data within

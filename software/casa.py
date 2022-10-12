@@ -1,18 +1,21 @@
 try:
     import casatools as tools
     import casatasks as tasks
-    raise ImportWarning("casatools/casatasks are not installed")
 except ModuleNotFoundError:
     import os
     import subprocess
     import pathlib
     from typing import Union, Optional
+    import warnings
 
     from .. import LOGGER
     from .common import which
 
-    _CASA_PATH = which('casa')
+    warnings.warn("casatools/casatasks are not installed in this python "
+                  "environment, checking for monolithic CASA distribution",
+                  ImportWarning)
 
+    _CASA_PATH = which('casa')
     if _CASA_PATH is None:
         raise EnvironmentError("CASA is not in your path")
 
