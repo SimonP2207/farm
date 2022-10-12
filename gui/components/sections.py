@@ -350,10 +350,16 @@ def field(master: Type[tk.Frame]) -> Section:
         var_type=float, default=8.
     )
 
+    field.fields['n_cell'] = EntryField(
+        master=field.content_frame, text="Number of cells",
+        hint="Number of cells across field of view",
+        var_type=int, default=float(format(512, '.6f'))
+    )
+
     field.fields['cdelt'] = EntryField(
         master=field.content_frame, text="Cell size [deg]",
         hint="Pixel size in RA/declination in degrees",
-        var_type=float, default=float(format(8. / 1024, '.6f'))
+        var_type=float, default=float(format(8. / 512, '.6f'))
     )
 
     return field
@@ -572,6 +578,12 @@ def eor_user_params(master: Type[tk.Frame]) -> Section:
     params.fields['USE_INTERPOLATION_TABLES'] = CheckbuttonField(
         master=params.content_frame, text="Use Interpolation Tables?",
         hint="Whether to use interpolation tables. True makes the run faster",
+        default=True
+    )
+
+    params.fields['plot_lc'] = CheckbuttonField(
+        master=params.content_frame, text="Plot lightcone?",
+        hint="Whether to plot the lightcone or not",
         default=True
     )
 

@@ -48,56 +48,56 @@ class Scan:
 
         return s
 
-    def create_beam_pattern_fits(self, cfg: FarmConfiguration,
-                                 beam_fits: pathlib.Path):
-        """
-        Create the primary beam pattern for this scan using Oskar
-
-        Parameters
-        ----------
-        cfg
-            FarmConfiguration file
-        beam_fits
-            Full path for output .fits file
-        """
-        from .. import miscellaneous as misc
-        from ..software.oskar import run_oskar_sim_beam_pattern
-
-        # Assign filename of output beam from oskar's sim_beam_pattern to
-        # variable, oskar_out_beam_fname
-        beam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
-        beam_root = cfg.root_name.append(f"_{misc.generate_random_chars(10)}")
-        beam_name = beam_root.append(beam_sfx)
-        oskar_out_beam_fname = beam_name.append('.fits')
-
-        # Create beam pattern as .fits cube using oskar's sim_beam_pattern task
-        LOGGER.info(f"Running oskar_sim_beam_pattern from {cfg.sbeam_ini}")
-        cfg.set_oskar_sim_beam_pattern("beam_pattern/root_path", beam_root)
-        cfg.set_oskar_sim_beam_pattern("observation/start_time_utc",
-                                       self.start)
-        cfg.set_oskar_sim_beam_pattern("observation/length", self.duration)
-        run_oskar_sim_beam_pattern(cfg.sbeam_ini)
-
-        beam_hdu = fits.open(oskar_out_beam_fname)
-        bmout_hdu = fits.PrimaryHDU(beam_hdu[0].data[0, :, :, :])
-        bmout_hdu.header.set('CTYPE1', 'RA---SIN')
-        bmout_hdu.header.set('CTYPE2', 'DEC--SIN')
-        bmout_hdu.header.set('CTYPE3', 'FREQ    ')
-        bmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
-        bmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
-        bmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
-        bmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
-        bmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
-        bmout_hdu.header.set('CRPIX3', 1)
-        bmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
-        bmout_hdu.header.set('CDELT2', cfg.field.cdelt)
-        bmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
-        bmout_hdu.header.set('CUNIT1', 'deg     ')
-        bmout_hdu.header.set('CUNIT2', 'deg     ')
-        bmout_hdu.header.set('CUNIT3', 'Hz      ')
-        bmout_hdu.writeto(beam_fits, overwrite=True)
-
-        oskar_out_beam_fname.unlink()
+    # def create_beam_pattern_fits(self, cfg: FarmConfiguration,
+    #                              beam_fits: pathlib.Path):
+    #     """
+    #     Create the primary beam pattern for this scan using Oskar
+    #
+    #     Parameters
+    #     ----------
+    #     cfg
+    #         FarmConfiguration file
+    #     beam_fits
+    #         Full path for output .fits file
+    #     """
+    #     from .. import miscellaneous as misc
+    #     from ..software.oskar import run_oskar_sim_beam_pattern
+    #
+    #     # Assign filename of output beam from oskar's sim_beam_pattern to
+    #     # variable, oskar_out_beam_fname
+    #     beam_sfx = '_S0000_TIME_SEP_CHAN_SEP_AUTO_POWER_AMP_I_I'
+    #     beam_root = cfg.root_name.append(f"_{misc.generate_random_chars(10)}")
+    #     beam_name = beam_root.append(beam_sfx)
+    #     oskar_out_beam_fname = beam_name.append('.fits')
+    #
+    #     # Create beam pattern as .fits cube using oskar's sim_beam_pattern task
+    #     LOGGER.info(f"Running oskar_sim_beam_pattern from {cfg.sbeam_ini}")
+    #     cfg.set_oskar_sim_beam_pattern("beam_pattern/root_path", beam_root)
+    #     cfg.set_oskar_sim_beam_pattern("observation/start_time_utc",
+    #                                    self.start)
+    #     cfg.set_oskar_sim_beam_pattern("observation/length", self.duration)
+    #     run_oskar_sim_beam_pattern(cfg.sbeam_ini)
+    #
+    #     with fits.open(oskar_out_beam_fname) as beam_hdu:
+    #         bmout_hdu = fits.PrimaryHDU(beam_hdu[0].data[0, :, :, :])
+    #         bmout_hdu.header.set('CTYPE1', 'RA---SIN')
+    #         bmout_hdu.header.set('CTYPE2', 'DEC--SIN')
+    #         bmout_hdu.header.set('CTYPE3', 'FREQ    ')
+    #         bmout_hdu.header.set('CRVAL1', cfg.field.coord0.ra.deg)
+    #         bmout_hdu.header.set('CRVAL2', cfg.field.coord0.dec.deg)
+    #         bmout_hdu.header.set('CRVAL3', cfg.correlator.freq_min)
+    #         bmout_hdu.header.set('CRPIX1', cfg.field.nx // 2)
+    #         bmout_hdu.header.set('CRPIX2', cfg.field.ny // 2)
+    #         bmout_hdu.header.set('CRPIX3', 1)
+    #         bmout_hdu.header.set('CDELT1', -cfg.field.cdelt)
+    #         bmout_hdu.header.set('CDELT2', cfg.field.cdelt)
+    #         bmout_hdu.header.set('CDELT3', cfg.correlator.freq_inc)
+    #         bmout_hdu.header.set('CUNIT1', 'deg     ')
+    #         bmout_hdu.header.set('CUNIT2', 'deg     ')
+    #         bmout_hdu.header.set('CUNIT3', 'Hz      ')
+    #         bmout_hdu.writeto(beam_fits, overwrite=True)
+    #
+    #     oskar_out_beam_fname.unlink()
 
 
 class Observation:
@@ -234,11 +234,12 @@ class Observation:
             cdelt = self.cfg.field.fov[0] / nx
 
         scan_sbeam_ini = self.cfg.sbeam_ini.with_name(
-                             self.cfg.sbeam_ini.name.replace(
-                                 self.cfg.sbeam_ini.suffix,
-                                 f"_scan{self.n_scan(scan)}{self.cfg.sbeam_ini.suffix}"
-                             )
-                         )
+            self.cfg.sbeam_ini.name.replace(
+                self.cfg.sbeam_ini.suffix,
+                f"_scan{self.n_scan(scan)}{self.cfg.sbeam_ini.suffix}"
+            )
+        )
+
         shutil.copyfile(self.cfg.sbeam_ini, scan_sbeam_ini)
         LOGGER.info(f"Running oskar_sim_beam_pattern from {scan_sbeam_ini}")
         run_oskar_sim_beam_pattern(scan_sbeam_ini)
@@ -262,11 +263,11 @@ class Observation:
             bmout_hdu.header.set('CUNIT3', 'Hz      ')
             bmout_hdu.writeto(beam_fits, overwrite=True)
 
-        if beam_fits.exists():
-            LOGGER.info(f"Successfully written primary beam for scan "
-                        f"#{self.n_scan(scan)} to {beam_fits}")
-        else:
+        if not beam_fits.exists():
             errh.raise_error(FileNotFoundError, f"{beam_fits} not written")
+
+        LOGGER.info(f"Successfully written primary beam for scan "
+                    f"#{self.n_scan(scan)} to {beam_fits}")
 
         self._products[scan]['PB'] = beam_fits
         oskar_out_beam_fname.unlink()
@@ -323,6 +324,8 @@ class Observation:
             hdul.writeto(scan_tec_fits, overwrite=True)
 
         self.products[scan]['TEC'] = scan_tec_fits
+
+        return scan_tec_fits
 
     def execute_scan(self, scan: Scan, scan_out_ms: pathlib.Path):
         """
@@ -394,7 +397,9 @@ class Observation:
         if not scan_out_ms.exists():
             errh.raise_error(FileNotFoundError,
                              f"Output measurement set from oskar, {scan_out_ms}"
-                             f", not found")
+                             f", not produced/found")
+
+        self._products[scan]['ms'] = scan_out_ms
 
     def concat_scan_measurement_sets(self, out_ms: pathlib.Path):
         """

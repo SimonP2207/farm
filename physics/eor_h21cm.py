@@ -77,7 +77,7 @@ def create_eor_h21cm_fits(params_file: str):
     freqs = np.linspace(params['correlator']['freq_min'],
                         params['correlator']['freq_max'],
                         params['correlator']['nchan'])
-    n_output_cell = params['field']['n_cells']
+    n_output_cell = params['field']['n_cell']
     plot_light_cone = params['user_params']['plot_lc']
 
     # Number of cells per side for the low res box (output cube)
@@ -198,7 +198,7 @@ def create_eor_h21cm_fits(params_file: str):
     )  # Mpc * Mpc * Mpc to deg * deg * Hz
 
     # save to a fits file
-    lc_out = np.float32(obs_lc.transpose())
+    lc_out = np.float32(obs_lc.transpose()[::-1])
     lc_out /= 1000.  # mK to K
 
     hdu = fits.PrimaryHDU(lc_out)
