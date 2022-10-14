@@ -23,11 +23,6 @@ oskar_sky_model_cols = {'ra': 'ra_deg', 'dec': 'dec_deg',
                         'min': 'minor_axis_arcsec',
                         'pa': 'position_angle_deg'}
 
-if sfuncs.which('oskar') is None:
-    errh.raise_error(ImportError, "oskar is not in your PATH")
-
-oskar_path = pathlib.Path(sfuncs.which('oskar'))
-
 
 def add_dataframe_to_sky(df: pd.DataFrame, sky: Sky,
                          col_dict: Optional[dict] = None):
@@ -130,70 +125,123 @@ def run_oskar_task(oskar_task: str, ini_file: Union[pathlib.Path, str]):
     subprocess.run(cmd.format(str(ini_file.resolve())), shell='True')
 
 
-# Parse list of available oskar tasks and set up relevant module variables to
-# handle setting/running those oskar tasks
-# This works, but not advistable as import inspections raise errors when any
-# functions created below are imported
-# for f in oskar_path.parent.glob('./*'):
-#     if f.name.startswith('oskar_') and not f.is_dir():
-#         for i, purpose in enumerate(('set', 'run')):
-#             operation = (set_oskar_task_ini, run_oskar_task)[i]
-#             locals()[f"{purpose}_{f.name}"] = partial(operation, f.name)
+# oskar_sim_beam_pattern
+if sfuncs.which('oskar_sim_beam_pattern') is not None:
+    set_oskar_sim_beam_pattern = partial(set_oskar_task_ini,
+                                         "oskar_sim_beam_pattern")
+    run_oskar_sim_beam_pattern = partial(run_oskar_task,
+                                         "oskar_sim_beam_pattern")
+else:
+    errh.raise_error(ImportError, "oskar_sim_beam_pattern not in $PATH")
 
-set_oskar_sim_beam_pattern = partial(set_oskar_task_ini,
-                                     "oskar_sim_beam_pattern")
-set_oskar_binary_file_query = partial(set_oskar_task_ini,
-                                      "oskar_binary_file_query")
-set_oskar_convert_ecef_to_enu = partial(set_oskar_task_ini,
-                                        "oskar_convert_ecef_to_enu")
-set_oskar_filter_sky_model_clusters = partial(set_oskar_task_ini,
-                                              "oskar_filter_sky_model_clusters")
-set_oskar_fits_image_to_sky_model = partial(set_oskar_task_ini,
-                                            "oskar_fits_image_to_sky_model")
-set_oskar_system_info = partial(set_oskar_task_ini,
-                                "oskar_system_info")
-set_oskar_vis_add_noise = partial(set_oskar_task_ini,
-                                  "oskar_vis_add_noise")
-set_oskar_vis_to_ms = partial(set_oskar_task_ini,
-                              "oskar_vis_to_ms")
-set_oskar_convert_geodetic_to_ecef = partial(set_oskar_task_ini,
-                                             "oskar_convert_geodetic_to_ecef")
-set_oskar_fit_element_data = partial(set_oskar_task_ini,
-                                     "oskar_fit_element_data")
-set_oskar_imager = partial(set_oskar_task_ini,
-                           "oskar_imager")
-set_oskar_sim_interferometer = partial(set_oskar_task_ini,
-                                       "oskar_sim_interferometer")
-set_oskar_vis_add = partial(set_oskar_task_ini,
-                            "oskar_vis_add")
-set_oskar_vis_summary = partial(set_oskar_task_ini,
-                                "oskar_vis_summary")
+# oskar_sim_interferometer
+if sfuncs.which('oskar_sim_interferometer') is not None:
+    set_oskar_sim_interferometer = partial(set_oskar_task_ini,
+                                           "oskar_sim_interferometer")
+    run_oskar_sim_interferometer = partial(run_oskar_task,
+                                           "oskar_sim_interferometer")
+else:
+    errh.raise_error(ImportError, "oskar_sim_interferometer not in $PATH")
 
-run_oskar_sim_beam_pattern = partial(run_oskar_task,
-                                     "oskar_sim_beam_pattern")
-run_oskar_binary_file_query = partial(run_oskar_task,
-                                      "oskar_binary_file_query")
-run_oskar_convert_ecef_to_enu = partial(run_oskar_task,
-                                        "oskar_convert_ecef_to_enu")
-run_oskar_filter_sky_model_clusters = partial(run_oskar_task,
-                                              "oskar_filter_sky_model_clusters")
-run_oskar_fits_image_to_sky_model = partial(run_oskar_task,
-                                            "oskar_fits_image_to_sky_model")
-run_oskar_system_info = partial(run_oskar_task,
-                                "oskar_system_info")
-run_oskar_vis_add_noise = partial(run_oskar_task,
-                                  "oskar_vis_add_noise")
-run_oskar_vis_to_ms = partial(run_oskar_task,
-                              "oskar_vis_to_ms")
-run_oskar_convert_geodetic_to_ecef = partial(run_oskar_task,
-                                             "oskar_convert_geodetic_to_ecef")
-run_oskar_fit_element_data = partial(run_oskar_task,
-                                     "oskar_fit_element_data")
-run_oskar_imager = partial(run_oskar_task,
-                           "oskar_imager")
-run_oskar_sim_interferometer = partial(run_oskar_task,
-                                       "oskar_sim_interferometer")
-run_oskar_vis_add = partial(run_oskar_task,
-                            "oskar_vis_add")
-run_oskar_vis_summary = partial(run_oskar_task,
-                                "oskar_vis_summary")
+# oskar_binary_file_query
+if sfuncs.which('oskar_binary_file_query') is not None:
+    set_oskar_binary_file_query = partial(set_oskar_task_ini,
+                                          "oskar_binary_file_query")
+    run_oskar_binary_file_query = partial(run_oskar_task,
+                                          "oskar_binary_file_query")
+else:
+    errh.issue_warning(ImportWarning, "oskar_binary_file_query not in $PATH")
+
+# oskar_convert_ecef_to_enu
+if sfuncs.which('oskar_convert_ecef_to_enu') is not None:
+    set_oskar_convert_ecef_to_enu = partial(set_oskar_task_ini,
+                                            "oskar_convert_ecef_to_enu")
+    run_oskar_convert_ecef_to_enu = partial(run_oskar_task,
+                                            "oskar_convert_ecef_to_enu")
+else:
+    errh.issue_warning(ImportWarning, "oskar_convert_ecef_to_enu not in $PATH")
+
+# oskar_filter_sky_model_clusters
+if sfuncs.which('oskar_filter_sky_model_clusters') is not None:
+    set_oskar_filter_sky_model_clusters = partial(
+        set_oskar_task_ini, "oskar_filter_sky_model_clusters"
+    )
+    run_oskar_filter_sky_model_clusters = partial(
+        run_oskar_task, "oskar_filter_sky_model_clusters"
+    )
+else:
+    errh.issue_warning(ImportWarning,
+                       "oskar_filter_sky_model_clusters not in $PATH")
+
+# oskar_fits_image_to_sky_model
+if sfuncs.which('oskar_fits_image_to_sky_model') is not None:
+    set_oskar_fits_image_to_sky_model = partial(set_oskar_task_ini,
+                                                "oskar_fits_image_to_sky_model")
+    run_oskar_fits_image_to_sky_model = partial(run_oskar_task,
+                                                "oskar_fits_image_to_sky_model")
+else:
+    errh.issue_warning(ImportWarning,
+                       "oskar_fits_image_to_sky_model not in $PATH")
+
+# oskar_system_info
+if sfuncs.which('oskar_system_info') is not None:
+    set_oskar_system_info = partial(set_oskar_task_ini, "oskar_system_info")
+    run_oskar_system_info = partial(run_oskar_task, "oskar_system_info")
+else:
+    errh.issue_warning(ImportWarning, "oskar_system_info not in $PATH")
+
+# oskar_vis_add_noise
+if sfuncs.which('oskar_vis_add_noise') is not None:
+    set_oskar_vis_add_noise = partial(set_oskar_task_ini, "oskar_vis_add_noise")
+    run_oskar_vis_add_noise = partial(run_oskar_task, "oskar_vis_add_noise")
+else:
+    errh.issue_warning(ImportWarning, "oskar_vis_add_noise not in $PATH")
+
+# oskar_vis_to_ms
+if sfuncs.which('oskar_vis_to_ms') is not None:
+    set_oskar_vis_to_ms = partial(set_oskar_task_ini, "oskar_vis_to_ms")
+    run_oskar_vis_to_ms = partial(run_oskar_task, "oskar_vis_to_ms")
+else:
+    errh.issue_warning(ImportWarning, "oskar_vis_to_ms not in $PATH")
+
+# oskar_convert_geodetic_to_ecef
+if sfuncs.which('oskar_convert_geodetic_to_ecef') is not None:
+    set_oskar_convert_geodetic_to_ecef = partial(
+        set_oskar_task_ini, "oskar_convert_geodetic_to_ecef"
+    )
+    run_oskar_convert_geodetic_to_ecef = partial(
+        run_oskar_task, "oskar_convert_geodetic_to_ecef"
+    )
+else:
+    errh.issue_warning(ImportWarning,
+                       "oskar_convert_geodetic_to_ecef not in $PATH")
+
+# oskar_fit_element_data
+if sfuncs.which('oskar_fit_element_data') is not None:
+    set_oskar_fit_element_data = partial(set_oskar_task_ini,
+                                         "oskar_fit_element_data")
+    run_oskar_fit_element_data = partial(run_oskar_task,
+                                         "oskar_fit_element_data")
+else:
+    errh.issue_warning(ImportWarning, "oskar_fit_element_data not in $PATH")
+
+# oskar_imager
+if sfuncs.which('oskar_imager') is not None:
+    set_oskar_imager = partial(set_oskar_task_ini, "oskar_imager")
+    run_oskar_imager = partial(run_oskar_task, "oskar_imager")
+else:
+    errh.issue_warning(ImportWarning, "oskar_imager not in $PATH")
+
+# oskar_vis_add
+if sfuncs.which('oskar_vis_add') is not None:
+    set_oskar_vis_add = partial(set_oskar_task_ini, "oskar_vis_add")
+    run_oskar_vis_add = partial(run_oskar_task, "oskar_vis_add")
+else:
+    errh.issue_warning(ImportWarning, "oskar_vis_add not in $PATH")
+
+# oskar_vis_summary
+if sfuncs.which('oskar_vis_summary') is not None:
+    set_oskar_vis_summary = partial(set_oskar_task_ini, "oskar_vis_summary")
+    run_oskar_vis_summary = partial(run_oskar_task, "oskar_vis_summary")
+else:
+    errh.issue_warning(ImportWarning, "oskar_vis_summary not in $PATH")
