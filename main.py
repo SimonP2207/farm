@@ -10,12 +10,16 @@ import logging
 import argparse
 import pathlib
 from datetime import datetime
+from typing import TypeVar, Optional
 
+import h5py
 import numpy as np
 from astropy.io import fits
 
+import colorednoise as cn
+
 import farm
-from farm.data import loader
+from farm import config
 import farm.physics.astronomy as ast
 import farm.miscellaneous as misc
 from farm.miscellaneous import generate_random_chars as grc
@@ -28,6 +32,91 @@ from farm.software import casa
 from farm.software.miriad import miriad
 from farm.software import oskar
 from farm import LOGGER
+
+AnySkyCompCfg = TypeVar('AnySkyCompCfg', bound=config.SkyComponentConfiguration)
+
+# TODO: Generic function to process a single SkyComponent from the
+#  configuration. Still in progress.
+def process_component(
+        comp_name: str,
+        sky_model: farm.sky_model.SkyModel,
+        comp_cfg: AnySkyCompCfg,
+        field: config.Field,
+        correlator: config.Correlator
+) -> Optional[farm.sky_model.SkyComponent]:
+    """
+    Method to process a SkyComponent according to its configuration
+
+    Parameters
+    ----------
+    comp_name
+        Name to give the SkyComponent instance
+    sky_model
+        SkyModel instance with which to regrid to
+    comp_cfg
+        farm.config.SkyComponentConfiguration or any of its childclasses from
+        which to process the SkyComponent
+    field
+        farm.config.Field configuration instance
+    correlator
+        farm.config.Correlator configuration instance
+
+    Returns
+    -------
+    If SkyComponent configuration is included, returns a
+    farm.sky_model.SkyComponent instance, otherwise None
+    """
+    # Include the sky component in the sky model?
+    comp = None
+    if comp_cfg.include:
+        # Whether to create from scratch or load from table/image
+        if not hasattr(comp_cfg, 'create') or not comp_cfg.create:
+            # Load SkyComponent from image or table
+            if not comp_cfg.image.exists():
+                errh.raise_error(FileNotFoundError,
+                                 f"{comp_cfg.image} does not exist")
+            elif comp_cfg.image.is_dir():
+                errh.raise_error(FileNotFoundError,
+                                 f"{comp_cfg.image} is a directory")
+
+            LOGGER.info(
+                f"Loading {comp_name} component from {comp_cfg.image}")
+
+            if misc.fits.is_fits_image(comp_cfg.image):
+                with fits.open(comp_cfg.image) as hdulist:
+                    fits_nx = np.shape(hdulist[0].data)[-1]
+
+                # cdelt/coord0 replace fits header values here since small-scale
+                # image is notx  a real observation -< Is this a problem?
+                comp = farm.sky_model.SkyComponent.load_from_fits(
+                    fitsfile=comp_cfg.image,
+                    name=comp_name,
+                    cdelt=field.fov[0] / fits_nx,
+                    coord0=field.coord0,
+                    freqs=correlator.frequencies
+                )
+            elif misc.fits.is_fits_table(comp_cfg.image):
+                if misc.fits.is_fits_table(fits_eg_real):
+                    # Parse .fits table data
+                    data = misc.fits.fits_table_to_dataframe(fits_eg_real)
+                elif misc.file_handling.is_osm_table(fits_eg_real):
+                    data = misc.file_handling.osm_to_dataframe(fits_eg_real)
+                else:
+                    errh.raise_error(Exception,
+                                     f"Unsure of format for table, "
+                                     f"{fits_eg_real}")
+                # TODO: How to implement source filtering here?
+                ...
+            else:
+                errh.raise_error(ValueError,
+                                 f"{comp_cfg.image} is neither a fits image, "
+                                 f"fits table, or OSKAR sky model file")
+
+        else:
+            # Create SkyComponent from scratch
+            ...
+
+        return comp.regrid(sky_model)
 
 
 # ############################################################################ #
@@ -58,7 +147,7 @@ else:
     DRY_RUN = False
     LOG_LEVEL = logging.DEBUG
 
-cfg = loader.FarmConfiguration(config_file)
+cfg = config.FarmConfiguration(config_file)
 if len(sys.argv) != 1:
     os.chdir(cfg.output_dcy)
 
@@ -456,6 +545,10 @@ tecscreen = None
 if cfg.calibration.tec and not MODEL_ONLY:
     if cfg.calibration.tec.create:
         if not DRY_RUN:
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            # TODO: PUT INTO TECScreen class, f(output_file, r0, speed, alpha,
+            #  sampling, t_int, layer_params, bmax) -> TECScreen instance
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
             # TODO: Hard-coded values here
             r0 = 1e4
             speed = 150e3 / 3600
@@ -492,10 +585,13 @@ if cfg.calibration.tec and not MODEL_ONLY:
 
             tecscreen.create_tec_screen(cfg.output_dcy / 'tec_screen.fits')
             cfg.calibration.tec.image.append(tecscreen)
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         else:
             LOGGER.info("DRYRUN: Skipping TEC screen creation")
     else:
-        tec_compatible = farm.data.loader.check_tec_image_compatibility(
+        tec_compatible = farm.config.check_tec_image_compatibility(
             cfg, cfg.calibration.tec.image
         )
         if not tec_compatible[0]:
@@ -529,6 +625,67 @@ for scan in observation.scans:
     rseed_scan = observation.generate_scan_seed(cfg.calibration.noise.seed,
                                                 scan)
     n_scan_str = format(n_scan, f'0{len(str(observation.n_scans)) + 1}')
+
+    # Implement gain/bandpass errors for scan
+    # See https://ska-telescope.gitlab.io/sim/oskar/telescope_model/telescope_model.html#telescope-gain-model
+    # for description of how produced gain errors are implemented as part of the
+    # telescope model
+    num_int, num_freq, num_tel = (np.ceil(scan.duration / cfg.correlator.t_int),
+                                  cfg.correlator.n_chan,
+                                  cfg.telescope.n_stations)
+    gains = np.empty((num_int, num_freq, num_tel), dtype=np.csingle)
+
+    # Distribution parameters.
+    t_beta = 2.  # power law exponent of time error PSD
+    t_mean_amp = 1.0
+    t_mean_phase = 0.0  # radians
+    t_std_amp = cfg.calibration.gains.amp_err
+    t_std_phase = cfg.calibration.gains.phase_err * np.pi / 180.  # radians
+
+    f_beta = 2  # power law exponent of freq error PSD
+    f_mean_amp = 1.0
+    f_mean_phase = 0.0  # radians
+    f_std_amp = cfg.calibration.bandpass.amp_err
+    f_std_phase = cfg.calibration.bandpass.phase_err * np.pi / 180.  # radians
+
+    for i_tscop in range(0, cfg.telescope.n_stations):
+        t_a0 = cn.powerlaw_psd_gaussian(t_beta, num_int,
+                                        random_state=rseed_scan)
+        t_amp = (t_a0 - np.average(t_a0)) * t_std_amp / np.std(t_a0)
+        t_amp += t_mean_amp
+
+        t_p0 = cn.powerlaw_psd_gaussian(t_beta, num_int,
+                                        random_state=rseed_scan + 1)
+        t_phase = (t_p0 - np.average(t_p0)) * t_std_phase / np.std(t_p0)
+        t_phase += t_mean_phase
+
+        t_gains = t_amp * np.exp(1j * t_phase)
+
+        f_a0 = cn.powerlaw_psd_gaussian(f_beta, num_freq,
+                                        random_state=rseed_scan + 2)
+        f_amp = (f_a0 - np.average(f_a0)) * f_std_amp / np.std(f_a0)
+        f_amp += f_mean_amp
+
+        f_p0 = cn.powerlaw_psd_gaussian(f_beta, num_freq,
+                                        random_state=rseed_scan + 3)
+        f_phase = (f_p0 - np.average(f_p0)) * f_std_phase / np.std(f_p0)
+        f_phase += f_mean_phase
+
+        f_gains = f_amp * np.exp(1j * f_phase)
+
+        tf_gains = np.outer(t_gains, f_gains)
+        gains[:, :, i_tscop] = tf_gains
+
+    # Write HDF5 file with recognised dataset names.
+    tscop_gains_file = cfg.telescope.model / "gain_model.h5"
+    if tscop_gains_file.exists():
+        LOGGER.info(f"{tscop_gains_file.resolve()} exists. Removing")
+        tscop_gains_file.unlink()
+    with h5py.File(tscop_gains_file, "w") as hdf_file:
+        hdf_file.create_dataset("freq (Hz)", data=cfg.correlator.frequencies)
+        hdf_file.create_dataset("gain_xpol", data=gains)
+    gains_save_dcy = cfg.output_dcy / 'gains'
+    shutil.copy2(tscop_gains_file, gains_save_dcy / f'gain_scan{n_scan_str}.h5')
 
     # Primary beam creation
     scan_beam_fits = cfg.root_name.append(f'_ICUT_{n_scan_str}.fits')
@@ -585,25 +742,6 @@ for scan in observation.scans:
 
     miriad.puthd(_in=f"{scan_out_mirvis}/restfreq", value=1.42040575)
     miriad.puthd(_in=f"{scan_out_mirvis}/telescop", value="SKA1-LOW")
-
-    # Implement gain and bandpass errors
-    # TODO: t_interval hard-coded here
-    miriad.implement_gain_errors(
-        scan_out_mirvis, t_interval=240.,
-        pnoise=cfg.calibration.gains.phase_err,
-        gnoise=cfg.calibration.gains.amp_err,
-        rseed=observation.products[scan]['seed']
-    )
-
-    miriad.implement_bandpass_errors(
-        scan_out_mirvis, nchan=cfg.correlator.n_chan,
-        freq0=cfg.correlator.freq_min,
-        chan_width=cfg.correlator.chan_width,
-        pnoise=cfg.calibration.gains.phase_err,
-        gnoise=cfg.calibration.gains.amp_err,
-        rseed=observation.products[scan]['seed']
-    )
-
     miriad.fits(op='uvout', _in=scan_out_mirvis, out=scan_out_uvfits)
     shutil.rmtree(scan_out_mirvis)
 

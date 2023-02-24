@@ -16,7 +16,7 @@ from matplotlib.ticker import MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from ..sky_model._classes import SkyClassType
-from ..data.loader import Telescope
+from ..config import Telescope
 from .image_functions import calculate_spix
 from . import decorators
 

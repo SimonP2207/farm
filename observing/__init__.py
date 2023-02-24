@@ -12,8 +12,6 @@ from .. import LOGGER
 @dataclass(frozen=True)
 class Scan:
     """Class for an observational scan"""
-    from ..data.loader import FarmConfiguration
-
     start: Time
     end: Time
 
@@ -103,7 +101,7 @@ class Scan:
 class Observation:
     """Class for an entire observational run incorporating multiple scans"""
     from ..calibration.tec import TECScreen
-    from ..data.loader import FarmConfiguration
+    from ..config import FarmConfiguration
 
     _PRODUCT_TYPES = ('image', 'PB', 'MS', 'TEC', 'seed')
 

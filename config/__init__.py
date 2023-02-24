@@ -15,7 +15,7 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from astropy.coordinates import EarthLocation
 
-from .. import LOGGER
+from farm import LOGGER
 from ..miscellaneous import error_handling as errh
 from ..miscellaneous import decorators
 
@@ -43,7 +43,7 @@ def check_tec_image_compatibility(farm_cfg: 'FarmConfiguration',
     return True, ""
 
 
-def check_config_validity(config_dict: dict):
+def _check_config_validity(config_dict: dict):
     """
     Check a dict loaded from a .toml configuration file has all required
     parameters
@@ -117,6 +117,9 @@ def check_config_validity(config_dict: dict):
         Param(('calibration', 'gains', 'include'), bool),
         Param(('calibration', 'gains', 'phase_err'), float),
         Param(('calibration', 'gains', 'amp_err'), float),
+        Param(('calibration', 'bandpass', 'include'), bool),
+        Param(('calibration', 'bandpass', 'phase_err'), float),
+        Param(('calibration', 'bandpass', 'amp_err'), float),
         Param(('calibration', 'DD-effects', 'include'), bool),
         Param(('sky_models', '21cm', 'include'), bool),
         Param(('sky_models', '21cm', 'create'), bool),
@@ -192,23 +195,6 @@ def check_config_validity(config_dict: dict):
             errh.raise_error(FileNotFoundError, err_msg)
 
 
-def load_configuration(toml_file: Union[Path, str]) -> dict:
-    """Load a .toml configuration file and return it as a dict"""
-    if not isinstance(toml_file, Path):
-        toml_file = Path(toml_file)
-
-    if not toml_file.exists():
-        errh.raise_error(FileNotFoundError,
-                         f"{str(toml_file.resolve())} doesn't exist")
-
-    LOGGER.debug(f"{str(toml_file.resolve())} found")
-    config_dict = toml.load(toml_file)
-    check_config_validity(config_dict)
-    LOGGER.debug(f"{str(toml_file.resolve())} configuration is valid")
-
-    return config_dict
-
-
 @dataclass
 class Observation:
     """
@@ -216,10 +202,10 @@ class Observation:
     observation of variable numbers of scans
     """
     t_start: Time  # start time of observation
-    t_total: int  # s
-    n_scan: int  # s
-    min_gap_scan: int  # s
-    min_elevation: int  # deg
+    t_total: int  # [s]
+    n_scan: int  # [s]
+    min_gap_scan: int  # [s]
+    min_elevation: int  # [deg]
 
     def scan_times(
             self, coord0: SkyCoord, location: EarthLocation,
@@ -265,7 +251,7 @@ class Field:
     _frame: str
     nx: int
     ny: int
-    cdelt: float  # deg
+    cdelt: float  # [deg]
 
     @property
     def coord0(self):
@@ -414,6 +400,7 @@ class Calibration:
     noise: Union[bool, Noise]
     tec: Union[bool, TEC]
     gains: Union[bool, Gains]
+    bandpass: Union[bool, Gains]
     dd_effects: Union[bool, DDEffects]
 
 
@@ -526,15 +513,6 @@ class Telescope:
         return self._dist_between_points(pos, ref_station.position)
 
 
-# @dataclass
-# class SkyComponentConfiguration:
-#     create: bool
-#     image: Union[str, Path]
-#     flux_range: Tuple[float, float] = (0.0, 1e30)
-#     flux_inner: Union[None, float] = None
-#     flux_outer: Union[None, float] = None
-#     demix_error: Union[None, float] = None
-
 @dataclass
 class SkyComponentConfiguration:
     """Parent class handling SkyComponent inclusion/loading"""
@@ -612,10 +590,28 @@ class FarmConfiguration:
     Class to handle the configuration of running pipelines utilising the farm
     library
     """
+
+    @staticmethod
+    def _load_configuration_from_toml(toml_file: Union[Path, str]) -> dict:
+        """Load a .toml configuration file and return it as a dict"""
+        if not isinstance(toml_file, Path):
+            toml_file = Path(toml_file)
+
+        if not toml_file.exists():
+            errh.raise_error(FileNotFoundError,
+                             f"{str(toml_file.resolve())} doesn't exist")
+
+        LOGGER.debug(f"{str(toml_file.resolve())} found")
+        config_dict = toml.load(toml_file)
+        _check_config_validity(config_dict)
+        LOGGER.debug(f"{str(toml_file.resolve())} configuration is valid")
+
+        return config_dict
+
     @decorators.suppress_warnings("astropy", "erfa")
     def __init__(self, configuration_file: Path):
-        self.cfg = load_configuration(configuration_file)
         self.cfg_file = configuration_file
+        self.cfg = self._load_configuration_from_toml(self.cfg_file)
 
         # Directories setup
         self.output_dcy = Path(self.cfg["directories"]['output_dcy'])
@@ -655,7 +651,7 @@ class FarmConfiguration:
                                      cfg_correlator["t_int"], )
 
         # Calibration setup
-        noise, tec, gains, dd_effects = False, False, False, False
+        noise, tec, gains, bpass, dd_effects = False, False, False, False, False
         cfg_calibration = self.cfg["calibration"]
 
         if not self.output_dcy.exists():
@@ -684,12 +680,17 @@ class FarmConfiguration:
             gains = Gains(amp_err=cfg_calibration["gains"]["amp_err"],
                           phase_err=cfg_calibration["gains"]["phase_err"], )
 
+        if cfg_calibration["bandpass"]["include"]:
+            bpass = Gains(amp_err=cfg_calibration["bandpass"]["amp_err"],
+                          phase_err=cfg_calibration["bandpass"]["phase_err"], )
+
         if cfg_calibration["DD-effects"]['include']:
             dd_effects = DDEffects()
 
         self.calibration = Calibration(noise=noise,
                                        tec=tec,
                                        gains=gains,
+                                       bandpass=bpass,
                                        dd_effects=dd_effects)
 
         # Instantiate all instances of configuration classes for all sky model

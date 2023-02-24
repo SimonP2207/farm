@@ -12,19 +12,19 @@
   min_elevation = 30.0  # Minimum elevation [deg]
 
   [observation.field]
-    ra0 = "00:00:00.0"  # [HH:MM:SS.S]
-    dec0 = "-30:00:00.00"  # [DD:MM:SS.SS]
+    ra0 = "00:00:00.0"  # HH:MM:SS.S
+    dec0 = "-30:00:00.00"  # DD:MM:SS.SS
     frame = "fk5"  # Astropy-compatible frame string e.g. fk4, fk5, galactic etc
     nxpix = 1024  # Number of pixels in x/right ascension
     nypix = 1024  # Number of pixels in y/declination
-    cdelt = 28.125  # [arcsec]
+    cdelt = 28.125  # arcsec
 
   [observation.correlator]
     freq_min = 115e6  # Hz
     freq_max = 120e6  # Hz
     nchan = 2  # Number of evenly spaced channels across whole bandwidth, int
-    chanwidth = 250e3  # channel bandwidth for smearing calculation [Hz]
-    t_int = 60.0  # visibility integration time [s]
+    chanwidth = 250e3  # channel bandwidth for smearing calculation, Hz
+    t_int = 60.0  # visibility integration time, s
 
 # calibration not yet incorporated in to FARM
 [calibration]
@@ -76,9 +76,9 @@
   [sky_models.EG]  # Extragalactic foregrounds
     include = true
     image = ""
-    flux_inner = 10.0  # maximum flux for sources INSIDE the f.o.v. [Jy]
-    flux_outer = 10000.0  # minimum flux for sources OUTSIDE the f.o.v. [Jy]
-    flux_transition = 0.2  # flux below which to transition from known sources to T-RECS sources [Jy]
+    flux_inner = 10.0  # flux cutoff (ceil) within fov fov_deg, Jy
+    flux_outer = 10000.0  # flux cutoff (floor) beyond radius of fov_deg, Jy
+    flux_transition = 0.2  # lower flux cutoff for known sources/upper flux cutoff for T-RECS sources
 
     [sky_models.EG.Known]
       include = true
@@ -90,7 +90,7 @@
       image = "/Users/simon.purser/pylib/farm/data/files/sky_continuum_sdc3_v1_1.fits"  # fits image or table
 
 [wsclean]
-  taper-gaussian = 60  # [arcsec]
+  taper-gaussian = 60  # arcsec
   weight = 'uniform'
   super-weight = 4
   niter = 10000

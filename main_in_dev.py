@@ -10,19 +10,18 @@ import logging
 import argparse
 import pathlib
 from datetime import datetime
-from joblib import Parallel, delayed
-from joblib.externals.loky import set_loky_pickler
-set_loky_pickler('dill')
+from typing import Optional
 
 import numpy as np
 from astropy.io import fits
 
 import farm
-from farm import config
+from farm.data import loader
 import farm.physics.astronomy as ast
 import farm.miscellaneous as misc
 from farm.miscellaneous import generate_random_chars as grc
 import farm.miscellaneous.error_handling as errh
+from farm.miscellaneous.image_functions import pb_multiply
 from farm.miscellaneous import plotting
 from farm.observing import Scan, Observation
 import farm.sky_model.tb_functions as tb_funcs
@@ -30,6 +29,7 @@ from farm.software import casa
 from farm.software.miriad import miriad
 from farm.software import oskar
 from farm import LOGGER
+
 
 # ############################################################################ #
 # ############ Parse configuration from file or from command-line ############ #
@@ -59,7 +59,7 @@ else:
     DRY_RUN = False
     LOG_LEVEL = logging.DEBUG
 
-cfg = config.FarmConfiguration(config_file)
+cfg = loader.FarmConfiguration(config_file)
 if len(sys.argv) != 1:
     os.chdir(cfg.output_dcy)
 
@@ -182,13 +182,13 @@ if cfg.sky_model.galactic.small_scale_component.include:
             freqs=cfg.correlator.frequencies
         )
 
-        rot_angle = ast.angle_to_galactic_plane(cfg.field.coord0)
-        LOGGER.info(f"Rotating Galactic small-scale component by "
-                    f"{np.degrees(rot_angle):.1f}deg")
-        GSSM.rotate(angle=rot_angle, inplace=True)
+    rot_angle = ast.angle_to_galactic_plane(cfg.field.coord0)
+    LOGGER.info(f"Rotating Galactic small-scale component by "
+                f"{np.degrees(rot_angle):.1f}deg")
+    GSSM.rotate(angle=rot_angle, inplace=True)
 
-        LOGGER.info("Regridding small-scale image")
-        GSSM = GSSM.regrid(sky_model)
+    LOGGER.info("Regridding small-scale image")
+    GSSM = GSSM.regrid(sky_model)
 
     if cfg.sky_model.galactic.large_scale_component.include:
         LOGGER.info("Normalising small/large-scale power spectra")
@@ -438,7 +438,7 @@ if not MODEL_ONLY:
     msg = 'Computed scan times are:\n'
     for idx, (start, end) in enumerate(scan_times):
         msg += (
-            f"--> Scan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
+            f"\tScan {idx + 1}: {start.strftime('%d%b%Y %H:%M:%S').upper()}"
             f" to {end.strftime('%d%b%Y %H:%M:%S').upper()} "
             f"({(end - start).to_value('s'):.1f}s)")
         msg += '' if idx == (len(scan_times) - 1) else '\n'
@@ -457,6 +457,7 @@ tecscreen = None
 if cfg.calibration.tec and not MODEL_ONLY:
     if cfg.calibration.tec.create:
         if not DRY_RUN:
+            # TODO: Hard-coded values here
             r0 = 1e4
             speed = 150e3 / 3600
             alpha_mag = 0.999
@@ -495,7 +496,7 @@ if cfg.calibration.tec and not MODEL_ONLY:
         else:
             LOGGER.info("DRYRUN: Skipping TEC screen creation")
     else:
-        tec_compatible = config.check_tec_image_compatibility(
+        tec_compatible = farm.data.loader.check_tec_image_compatibility(
             cfg, cfg.calibration.tec.image
         )
         if not tec_compatible[0]:
@@ -523,22 +524,24 @@ scans = [Scan(start, end) for start, end in scan_times]
 observation = Observation(cfg)
 observation.add_scan(scans)
 
-
-def obs_loop(cfg, observation, scan):
-    sky_model_mir_im = cfg.sky_model.image.with_suffix('.im')
-
+measurement_sets = {}
+for scan in observation.scans:
     n_scan = observation.n_scan(scan)
-    observation.generate_scan_seed(cfg.calibration.noise.seed, scan)
+    rseed_scan = observation.generate_scan_seed(cfg.calibration.noise.seed,
+                                                scan)
     n_scan_str = format(n_scan, f'0{len(str(observation.n_scans)) + 1}')
 
-    # Primary beam creation
-    scan_beam_fits = cfg.root_name.append(f'_ICUT_{n_scan_str}.fits')
-    observation.create_beam_pattern(scan, scan_beam_fits, resample=16,
-                                    template=cfg.sky_model.image)
+    # Primary beam creation for scan
+    observation.create_beam_pattern(
+        scan, beam_fits=cfg.root_name.append(f'_ICUT_{n_scan_str}.fits'),
+        resample=16, template=cfg.sky_model.image
+    )
 
-    if cfg.calibration.tec:
-        scan_tec_fits = cfg.root_name.append(f'_TEC_{n_scan_str}.fits')
-        observation.get_scan_tec_screen_slice(tecscreen, scan, scan_tec_fits)
+    if tecscreen:
+        observation.get_scan_tec_screen_slice(
+            tecscreen, scan,
+            scan_tec_fits=cfg.root_name.append(f'_TEC_{n_scan_str}.fits')
+        )
 
     # For the image based model cube, it is first necessary to regrid in a
     # way that will allow a single (u,v) grid to represent the data within
@@ -547,11 +550,10 @@ def obs_loop(cfg, observation, scan):
     # Since the model needs to be in Jy/pixel, it is necessary to reduce
     # the brightness as 1/f**2 to take account of the larger pixel size at
     # higher frequencies.
-    sky_model_pbcor = cfg.sky_model.image.stem
-    sky_model_pbcor += f"_pbcor_scan{n_scan_str}.fits"
+    sky_model_pbcor = f"{cfg.sky_model.image.stem}_pbcor_scan{n_scan_str}.fits"
     sky_model_pbcor = cfg.output_dcy / sky_model_pbcor
-    observation.pb_multiply(in_image=sky_model_mir_im, pb=scan_beam_fits,
-                            out_fitsfile=sky_model_pbcor, cellscal='1/F')
+    pb_multiply(in_image=sky_model_mir_im, pb=observation.products[scan]['PB'],
+                out_fitsfile=sky_model_pbcor, cellscal='1/F')
     sky_model_pbcor_mirim = sky_model_pbcor.with_suffix('.mirim')
 
     scan_out_ms: pathlib.Path = cfg.root_name.append(
@@ -562,13 +564,14 @@ def obs_loop(cfg, observation, scan):
 
     # Add SKA1-LOW to measurement set header and export measurement set to
     # uvfits format via casa
-    casa.tasks.vishead(vis=f"{scan_out_ms}", mode="put", hdkey="telescope",
-                    hdvalue="SKA1-LOW")
-    casa.tasks.exportuvfits(vis=f"{scan_out_ms}",
-                         fitsfile=f"{scan_out_uvfits}",
-                         datacolumn="data", multisource=False,
-                         writestation=False, overwrite=True)
-    shutil.rmtree(scan_out_ms)
+    casa.tasks.vishead(vis=f"{observation[scan]['ms']}", mode="put",
+                       hdkey="telescope", hdvalue="SKA1-LOW")
+    casa.tasks.exportuvfits(vis=f"{observation[scan]['ms']}",
+                            fitsfile=f"{scan_out_uvfits}",
+                            datacolumn="data", multisource=False,
+                            writestation=False, overwrite=True)
+    observation[scan]['uvfits'] = scan_out_uvfits
+    shutil.rmtree(observation[scan]['ms'])
 
     # Convert to miriad visibility data format and add relevant header
     # information
@@ -589,14 +592,14 @@ def obs_loop(cfg, observation, scan):
 
     # Implement gain and bandpass errors
     # TODO: t_interval hard-coded here
-    observation.implement_gain_errors(
+    miriad.implement_gain_errors(
         scan_out_mirvis, t_interval=240.,
         pnoise=cfg.calibration.gains.phase_err,
         gnoise=cfg.calibration.gains.amp_err,
         rseed=observation.products[scan]['seed']
     )
 
-    observation.implement_bandpass_errors(
+    miriad.implement_bandpass_errors(
         scan_out_mirvis, nchan=cfg.correlator.n_chan,
         freq0=cfg.correlator.freq_min,
         chan_width=cfg.correlator.chan_width,
@@ -609,18 +612,12 @@ def obs_loop(cfg, observation, scan):
     shutil.rmtree(scan_out_mirvis)
 
     casa.tasks.importuvfits(vis=f"{scan_out_ms}",
-                         fitsfile=f"{scan_out_uvfits}")
+                            fitsfile=f"{scan_out_uvfits}")
     scan_out_uvfits.unlink()
     casa.tasks.vishead(vis=f"{scan_out_ms}", mode="put", hdkey="telescope",
                        hdvalue="SKA1-LOW")
 
     observation.products[scan]['MS'] = scan_out_ms
-
-
-scans = observation.scans
-
-with Parallel(n_jobs=len(scans)) as parallel:
-    parallel(delayed(obs_loop)(cfg, observation, scan) for scan in scans)
 
 out_ms = cfg.root_name.append('.ms')
 observation.concat_scan_measurement_sets(out_ms)

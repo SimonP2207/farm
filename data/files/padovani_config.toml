@@ -1,9 +1,8 @@
 [directories]
-  root_name = "example_1"  # root name for all output files (not directory)
+  root_name = "core_1"  # root name for all output files (not directory)
   telescope_model = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/V512/telescope.tm"
   output_dcy = "/Users/simon.purser/Desktop/test_output_farm"
 
-# observation not yet incorporated in to FARM
 [observation]
   time = 2027-01-01T10:00:01  # Start time (UTC) YYYY-MM-DDTHH:MM:SS
   t_total = 28800  # Total on source time [s]
@@ -26,11 +25,10 @@
     chanwidth = 0.2e6  # channel bandwidth for smearing calculation, Hz
     t_int = 8.0  # visibility integration time, s
 
-# calibration not yet incorporated in to FARM
 [calibration]
   [calibration.noise]
     include = true
-    seed = 12345  # Random number seed for thermal noise calculation
+    seed = 5121345  # Random number seed for thermal noise calculation
     sefd_frequencies_file = "/Users/simon.purser/Desktop/LOFAR/telescope.tm/noise_frequencies.txt"
     sefd_file = "/Users/simon.purser/Desktop/LOFAR/telescope.tm/rms.txt"
   [calibration.TEC]
@@ -39,6 +37,10 @@
     image = []
     residual_error = 0.01
   [calibration.gains]
+    include = true
+    phase_err = 0.1  # Residual phase error [deg]
+    amp_err = 0.1  # Residual amplitude error [%]
+  [calibration.bandpass]
     include = true
     phase_err = 0.1  # Residual phase error [deg]
     amp_err = 0.1  # Residual amplitude error [%]
@@ -56,7 +58,7 @@
     demix_error = 0.001  # Factor of imperfect demixing of A-team sources
 
   [sky_models.Galactic]
-    include = true
+    include = false
     image = ""
 
     [sky_models.Galactic.LargeScale]

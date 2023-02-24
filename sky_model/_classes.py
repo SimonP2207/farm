@@ -188,7 +188,6 @@ class _BaseSkyClass(ABC):
         from ..miscellaneous import generate_random_chars
         from ..miscellaneous.fits import hdr3d
 
-
         # Set up fits header, WCS and data array
         im_hdr = hdr3d(int(fov[0] // cdelt),
                        int(fov[1] // cdelt),

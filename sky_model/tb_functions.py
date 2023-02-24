@@ -278,8 +278,6 @@ def padovani_core_t_b(core_type: str, b_field: int, dist_pc: float,
                 drr2 = np.take_along_axis(np.append(padovani_rs, np.nan),
                                           idxs - 1, axis=0)
 
-                # m = (zz2 - zz1) / (idxs - (idxs - 1))
-                # c = zz2 - m * idxs
                 m = (zz2 - zz1) / (drr2 - drr1)
                 c = zz2 - m * drr2
 

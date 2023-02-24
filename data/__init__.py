@@ -3,9 +3,7 @@ from pathlib import Path
 from typing import Callable
 import pandas as pd
 
-from . import loader
-
-__all__ = ['loader', 'FILES', 'DATA_FILE_DCY', 'ATEAM_DATA']
+__all__ = ['FILES', 'DATA_FILE_DCY', 'ATEAM_DATA']
 
 
 def _iterate_through_dict(d: dict, operation: Callable) -> dict:
