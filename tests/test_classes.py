@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import numpy.testing as npt
 
-from farm.sky_model._classes import SkyModel, SkyComponent
+from farm.sky_model._classes import SubbandSkyModel, SkyComponent
 from farm.sky_model.tb_functions import gdsm2016_t_b
 import farm.tests.fits_test_data as ftd
 
@@ -23,7 +23,7 @@ test_fits2_tb = test_dcy / 'test_fits2_tb.fits'
 class Test_SkyComponent(unittest.TestCase):
     # This decorator allows the instantiation of an instance of an abstract
     # class (for testing purposes only!)
-    @patch("farm.sky_model.classes._BaseSkyClass.__abstractmethods__", set())
+    @patch("farm.sky_model._classes._BaseSkyClass.__abstractmethods__", set())
     def setUp(self) -> None:
         self.sm1_inu = SkyComponent.load_from_fits(test_fits1_inu)
         self.sm2_inu = SkyComponent.load_from_fits(test_fits2_inu)
@@ -138,15 +138,15 @@ class Test_SkyModel(unittest.TestCase):
         cls.sm2_tb = SkyComponent.load_from_fits(test_fits2_tb)
 
     def setUp(self) -> None:
-        self.sky_model_inu = SkyModel((len(ftd.test_tb2[0][0]),
-                                       len(ftd.test_tb2[0])), ftd.test_cdelt,
-                                      ftd.test_coord0, ftd.test_frequencies)
-        self.sky_model_snu = SkyModel((len(ftd.test_tb2[0][0]),
-                                       len(ftd.test_tb2[0])), ftd.test_cdelt,
-                                      ftd.test_coord0, ftd.test_frequencies)
-        self.sky_model_tb = SkyModel((len(ftd.test_tb2[0][0]),
-                                      len(ftd.test_tb2[0])), ftd.test_cdelt,
-                                     ftd.test_coord0, ftd.test_frequencies)
+        self.sky_model_inu = SubbandSkyModel((len(ftd.test_tb2[0][0]),
+                                              len(ftd.test_tb2[0])), ftd.test_cdelt,
+                                             ftd.test_coord0, ftd.test_frequencies)
+        self.sky_model_snu = SubbandSkyModel((len(ftd.test_tb2[0][0]),
+                                              len(ftd.test_tb2[0])), ftd.test_cdelt,
+                                             ftd.test_coord0, ftd.test_frequencies)
+        self.sky_model_tb = SubbandSkyModel((len(ftd.test_tb2[0][0]),
+                                             len(ftd.test_tb2[0])), ftd.test_cdelt,
+                                            ftd.test_coord0, ftd.test_frequencies)
 
     def test_add_component(self):
         self.sky_model_inu.add_component(self.sm1_inu)

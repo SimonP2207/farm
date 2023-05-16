@@ -10,25 +10,113 @@ import logging
 import argparse
 import pathlib
 from datetime import datetime
-from typing import Optional
+from typing import TypeVar, Optional
 
+import h5py
 import numpy as np
 from astropy.io import fits
 
 import farm
-from farm.data import loader
+from farm import config
+from farm.calibration.noise import generate_gain_errors
 import farm.physics.astronomy as ast
 import farm.miscellaneous as misc
 from farm.miscellaneous import generate_random_chars as grc
 import farm.miscellaneous.error_handling as errh
 from farm.miscellaneous.image_functions import pb_multiply
 from farm.miscellaneous import plotting
-from farm.observing import Scan, Observation
+from farm.observing import Scan, Observation, Field, Correlator, Telescope
 import farm.sky_model.tb_functions as tb_funcs
 from farm.software import casa
 from farm.software.miriad import miriad
 from farm.software import oskar
 from farm import LOGGER
+
+AnySkyCompCfg = TypeVar('AnySkyCompCfg', bound=config.SkyComponentConfiguration)
+
+
+# TODO: Generic function to process a single SkyComponent from the
+#  configuration. Still in progress.
+def process_component(
+        comp_name: str,
+        sky_model: farm.sky_model.SubbandSkyModel,
+        comp_cfg: AnySkyCompCfg,
+        field: config.Field,
+        correlator: config.Correlator
+) -> Optional[farm.sky_model.SkyComponent]:
+    """
+    Method to process a SkyComponent according to its configuration
+
+    Parameters
+    ----------
+    comp_name
+        Name to give the SkyComponent instance
+    sky_model
+        SubbandSkyModel instance with which to regrid to
+    comp_cfg
+        farm.config.SkyComponentConfiguration or any of its childclasses from
+        which to process the SkyComponent
+    field
+        farm.config.Field configuration instance
+    correlator
+        farm.config.Correlator configuration instance
+
+    Returns
+    -------
+    If SkyComponent configuration is included, returns a
+    farm.sky_model.SkyComponent instance, otherwise None
+    """
+    # Include the sky component in the sky model?
+    comp = None
+    if comp_cfg.include:
+        # Whether to create from scratch or load from table/image
+        if not hasattr(comp_cfg, 'create') or not comp_cfg.create:
+            # Load SkyComponent from image or table
+            if not comp_cfg.image.exists():
+                errh.raise_error(FileNotFoundError,
+                                 f"{comp_cfg.image} does not exist")
+            elif comp_cfg.image.is_dir():
+                errh.raise_error(FileNotFoundError,
+                                 f"{comp_cfg.image} is a directory")
+
+            LOGGER.info(
+                f"Loading {comp_name} component from {comp_cfg.image}")
+
+            if misc.fits.is_fits_image(comp_cfg.image):
+                with fits.open(comp_cfg.image) as hdulist:
+                    fits_nx = np.shape(hdulist[0].data)[-1]
+
+                # cdelt/coord0 replace fits header values here since small-scale
+                # image is notx  a real observation -< Is this a problem?
+                comp = farm.sky_model.SkyComponent.load_from_fits(
+                    fitsfile=comp_cfg.image,
+                    name=comp_name,
+                    cdelt=field.fov[0] / fits_nx,
+                    coord0=field.coord0,
+                    freqs=correlator.frequencies
+                )
+            elif misc.fits.is_fits_table(comp_cfg.image):
+                if misc.fits.is_fits_table(fits_eg_real):
+                    # Parse .fits table data
+                    data = misc.fits.fits_table_to_dataframe(fits_eg_real)
+                elif misc.file_handling.is_osm_table(fits_eg_real):
+                    data = misc.file_handling.osm_to_dataframe(fits_eg_real)
+                else:
+                    errh.raise_error(Exception,
+                                     f"Unsure of format for table, "
+                                     f"{fits_eg_real}")
+                # TODO: How to implement source filtering here?
+                ...
+            else:
+                errh.raise_error(ValueError,
+                                 f"{comp_cfg.image} is neither a fits image, "
+                                 f"fits table, or OSKAR sky model file")
+
+        else:
+            # Create SkyComponent from scratch
+            ...
+
+        return comp.regrid(sky_model)
 
 
 # ############################################################################ #
@@ -59,16 +147,19 @@ else:
     DRY_RUN = False
     LOG_LEVEL = logging.DEBUG
 
-cfg = loader.FarmConfiguration(config_file)
+cfg = config.load_configuration_from_toml(config_file)
+root_name = cfg['directories']['root_name']
+output_dcy = pathlib.Path(cfg['directories']['output_dcy'])
+
 if len(sys.argv) != 1:
-    os.chdir(cfg.output_dcy)
+    os.chdir(output_dcy)
 
 # ############################################################################ #
 # ######################## Set up the logger ################################# #
 # ############################################################################ #
 pipeline_start = datetime.now()
 logfile_name = f'farm{pipeline_start.strftime("%Y%b%d_%H%M%S").upper()}.log'
-logfile = cfg.output_dcy / logfile_name
+logfile = output_dcy / logfile_name
 LOGGER.setLevel(logging.DEBUG)
 
 # Set up handler for writing log messages to log file
@@ -87,9 +178,13 @@ LOGGER.addHandler(console_handler)
 # ############################################################################ #
 # ########### Create run's root directory if it doesn't exists ############### #
 # ############################################################################ #
-if not cfg.output_dcy.exists():
-    LOGGER.info("Creating output directory %s" % cfg.output_dcy)
-    cfg.output_dcy.mkdir(exist_ok=True)
+if not output_dcy.exists():
+    LOGGER.info("Creating output directory %s" % output_dcy)
+    output_dcy.mkdir(exist_ok=True)
+# ############################################################################ #
+field = Field(**cfg['observation']['field'])
+tscop = Telescope(pathlib.Path(cfg["directories"]['telescope_model']))
+correlator = Correlator(**cfg['observation']['correlator'])
 # ############################################################################ #
 # ########################  # # # # # # # # # # # # # # # #################### #
 # ########################## Initial set up of OSKAR ######################### #
@@ -109,10 +204,10 @@ if not MODEL_ONLY:
 # ########################### SkyModel Creation ############################## #
 # #####################  # # # # # # # # # # # # # # # ####################### #
 # ############################################################################ #
-LOGGER.info(f"Instantiating SkyModel")
-sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
-                                    cfg.field.cdelt, cfg.field.coord0,
-                                    cfg.correlator.frequencies)
+LOGGER.info(f"Instantiating SubbandSkyModel")
+sky_model = farm.sky_model.SubbandSkyModel((field.nx, field.ny),
+                                           field.cdelt, field.coord0,
+                                           correlator.frequencies)
 # ############################################################################ #
 # ################## Large-scale Galactic foreground model ################### #
 # ############################################################################ #
@@ -121,11 +216,11 @@ if cfg.sky_model.galactic.large_scale_component.include:
     if cfg.sky_model.galactic.large_scale_component.create:
         LOGGER.info("Creating large-scale Galactic foreground images")
         GDSM = farm.sky_model.SkyComponent(
-            name='GDSM', npix=(cfg.field.nx, cfg.field.ny),
-            cdelt=cfg.field.cdelt, coord0=cfg.field.coord0,
+            name='GDSM', npix=(field.nx, field.ny),
+            cdelt=field.cdelt, coord0=field.coord0,
             tb_func=tb_funcs.gdsm2016_t_b
         )
-        GDSM.add_frequency(cfg.correlator.frequencies)
+        GDSM.add_frequency(correlator.frequencies)
     else:
         fits_gdsm = cfg.sky_model.galactic.small_scale_component.image
         if not fits_gdsm.exists():
@@ -136,7 +231,7 @@ if cfg.sky_model.galactic.large_scale_component.include:
         LOGGER.info(f"Loading Galactic large-scale component from {fits_gdsm}")
         GDSM = farm.sky_model.SkyComponent.load_from_fits(
             fitsfile=fits_gdsm, name='GDSM',
-            freqs=cfg.correlator.frequencies
+            freqs=correlator.frequencies
         )
         GDSM = GDSM.regrid(sky_model)
     # In the case that the small-scale Galactic emission is not included in
@@ -149,7 +244,7 @@ if cfg.sky_model.galactic.large_scale_component.include:
             LOGGER.info(f"DRYRUN: Skipping .fits creation for {GDSM.name} "
                         f"SkyComponent")
         else:
-            GDSM.write_fits(cfg.output_dcy / f"{GDSM.name}_component.fits",
+            GDSM.write_fits(output_dcy / f"{GDSM.name}_component.fits",
                             unit='JY/PIXEL')
 else:
     LOGGER.info("Not including large-scale Galactic component")
@@ -177,18 +272,18 @@ if cfg.sky_model.galactic.small_scale_component.include:
         GSSM = farm.sky_model.SkyComponent.load_from_fits(
             fitsfile=fits_gssm,
             name='GSSM',
-            cdelt=cfg.field.fov[0] / fits_nx,
-            coord0=cfg.field.coord0,
-            freqs=cfg.correlator.frequencies
+            cdelt=field.fov[0] / fits_nx,
+            coord0=field.coord0,
+            freqs=correlator.frequencies
         )
 
-    rot_angle = ast.angle_to_galactic_plane(cfg.field.coord0)
-    LOGGER.info(f"Rotating Galactic small-scale component by "
-                f"{np.degrees(rot_angle):.1f}deg")
-    GSSM.rotate(angle=rot_angle, inplace=True)
+        rot_angle = ast.angle_to_galactic_plane(field.coord0)
+        LOGGER.info(f"Rotating Galactic small-scale component by "
+                    f"{np.degrees(rot_angle):.1f}deg")
+        GSSM.rotate(angle=rot_angle, inplace=True)
 
-    LOGGER.info("Regridding small-scale image")
-    GSSM = GSSM.regrid(sky_model)
+        LOGGER.info("Regridding small-scale image")
+        GSSM = GSSM.regrid(sky_model)
 
     if cfg.sky_model.galactic.large_scale_component.include:
         LOGGER.info("Normalising small/large-scale power spectra")
@@ -201,7 +296,7 @@ if cfg.sky_model.galactic.small_scale_component.include:
             LOGGER.info(f"DRYRUN: Skipping .fits creation for {GSSM.name} "
                         f"SkyComponent")
         else:
-            GSSM.write_fits(cfg.output_dcy / f"{GSSM.name}_component.fits",
+            GSSM.write_fits(output_dcy / f"{GSSM.name}_component.fits",
                             unit='JY/PIXEL')
     else:
         sky_model.add_component(GSSM)
@@ -253,8 +348,8 @@ if cfg.sky_model.extragalactic.real_component.include:
 
         # Create source masks for field of view and side lobes
         mask_fov = ast.within_square_fov(
-            cfg.field.fov, cfg.field.coord0.ra.deg,
-            cfg.field.coord0.dec.deg, data.ra, data.dec
+            field.fov, field.coord0.ra.deg,
+            field.coord0.dec.deg, data.ra, data.dec
         )
 
         cfg_eg_real = cfg.sky_model.extragalactic.real_component
@@ -271,9 +366,9 @@ if cfg.sky_model.extragalactic.real_component.include:
         # Create SkyComponent instance and save .fits image of GLEAM
         # sources
         EG_REAL = farm.sky_model.SkyComponent.load_from_dataframe(
-            data, 'EG_Known', cfg.field.cdelt,
-            cfg.field.coord0, fov=cfg.field.fov,
-            freqs=cfg.correlator.frequencies,
+            data, 'EG_Known', field.cdelt,
+            field.coord0, fov=field.fov,
+            freqs=correlator.frequencies,
             flux_range=(cfg_eg_real.flux_transition,
                         cfg_eg_real.flux_inner),
             beam=None
@@ -281,7 +376,7 @@ if cfg.sky_model.extragalactic.real_component.include:
 
         if not DRY_RUN:
             EG_REAL.write_fits(
-                cfg.output_dcy / f"{EG_REAL.name}_component.fits",
+                output_dcy / f"{EG_REAL.name}_component.fits",
                 unit='JY/PIXEL'
             )
         else:
@@ -334,8 +429,8 @@ if cfg.sky_model.extragalactic.artifical_component.include:
         TRECS = farm.sky_model.SkyComponent.load_from_fits(
             fitsfile=fits_trecs,
             name='TRECS',
-            coord0=cfg.field.coord0,
-            freqs=cfg.correlator.frequencies
+            coord0=field.coord0,
+            freqs=correlator.frequencies
         )
 
     if TRECS:
@@ -364,8 +459,8 @@ if cfg.sky_model.h21cm:
     H21CM = farm.sky_model.SkyComponent.load_from_fits(
         fitsfile=fits_h21cm,
         name='H21CM',
-        coord0=cfg.field.coord0,
-        freqs=cfg.correlator.frequencies
+        coord0=field.coord0,
+        freqs=correlator.frequencies
     )
 
     H21CM = H21CM.regrid(sky_model)
@@ -381,16 +476,16 @@ LOGGER.info("Adding all included sky components into sky model")
 for component in sky_model.components:
     if not DRY_RUN:
         component.write_fits(
-            cfg.output_dcy / f"{component.name}_component.fits",
+            output_dcy / f"{component.name}_component.fits",
             unit='JY/PIXEL'
         )
     else:
-        LOGGER.info("DRYRUN: Skipping .fits creation for SkyModel components")
+        LOGGER.info("DRYRUN: Skipping .fits creation for SubbandSkyModel components")
 
 if not DRY_RUN:
     sky_model.write_fits(cfg.sky_model.image, unit='JY/PIXEL')
 else:
-    LOGGER.info("DRYRUN: Skipping .fits creation for SkyModel")
+    LOGGER.info("DRYRUN: Skipping .fits creation for SubbandSkyModel")
 
 if not MODEL_ONLY:
     # Do not use copy.deepcopy on Sky instances. Throws the error:
@@ -431,8 +526,8 @@ else:
 # ############################################################################ #
 scan_times = ()
 if not MODEL_ONLY:
-    scan_times = cfg.observation.scan_times(cfg.field.coord0,
-                                            cfg.telescope.location,
+    scan_times = cfg.observation.scan_times(field.coord0,
+                                            tscop.location,
                                             False)
 
     msg = 'Computed scan times are:\n'
@@ -446,9 +541,9 @@ if not MODEL_ONLY:
         LOGGER.info(line)
 
     plotting.target_altaz(
-        cfg.observation.t_start, cfg.telescope.location,
-        cfg.field.coord0, scan_times=scan_times,
-        savefig=cfg.output_dcy / "elevation_curve.pdf"
+        cfg.observation.t_start, tscop.location,
+        field.coord0, scan_times=scan_times,
+        savefig=output_dcy / "elevation_curve.pdf"
     )
 # ############################################################################ #
 # ######################## TEC/Ionospheric calibration/effect ################ #
@@ -457,46 +552,33 @@ tecscreen = None
 if cfg.calibration.tec and not MODEL_ONLY:
     if cfg.calibration.tec.create:
         if not DRY_RUN:
-            # TODO: Hard-coded values here
-            r0 = 1e4
-            speed = 150e3 / 3600
-            alpha_mag = 0.999
-            sampling = 100.0
-            t_int = 10.
-            layer_params = np.array([(r0, speed, 60.0, 300e3),
-                                     (r0, speed / 2.0, -30.0, 310e3)])
-            bmax = max(cfg.telescope.baseline_lengths.values())
+            alpha_mag = cfg['calibration']['TEC']['alpha_mag']
+            sampling = cfg['calibration']['TEC']['pixel_size']
+            t_int = cfg['calibration']['TEC']['t_frame']
 
-            screen_width_m = (2 * (np.max(layer_params[:, -1]) *
-                                   np.tan(np.radians(
-                                       (max(cfg.field.fov) / 2.)))
-                                   + bmax))
+            layer_params = np.empty((0, 4))
+            props = ('r0', 'vel', 'direction', 'altitude')
+            for layer in cfg['calibration']['TEC']['layers']:
+                layer_params = np.vstack(
+                    (layer_params, [layer[prop] for prop in props])
+                )
 
-            # Round screen width to nearest sensible number
-            screen_width_m = ((screen_width_m / sampling // 100 + 1) *
-                              100 * sampling)
+            bmax = max(tscop.baseline_lengths.values())
 
-            m = int(bmax / sampling)  # Pixels per sub-aperture
-            n = int(screen_width_m / bmax)  # Sub-apertures across screen
-            pscale = screen_width_m / (n * m)  # Pixel scale
-            rate = t_int ** -1.
-
-            arscreen = farm.calibration.tec.ArScreens(
-                n, m, pscale, rate, layer_params, alpha_mag,
-                cfg.calibration.noise.seed
+            tecscreen = farm.calibration.tec.TECScreen.create_from_params(
+                t_start=cfg.observation.t_start,
+                t_end=max([_ for __ in scan_times for _ in __]),
+                t_int=t_int, pixel_m=sampling, fov=max(field.fov),
+                bmax=bmax, layer_params=layer_params, alpha_mag=alpha_mag,
+                rseed=cfg.calibration.noise.seed
             )
 
-            tecscreen = farm.calibration.tec.TECScreen(
-                arscreen, cfg.observation.t_start,
-                max([_ for __ in scan_times for _ in __])
-            )
-
-            tecscreen.create_tec_screen(cfg.output_dcy / 'tec_screen.fits')
+            tecscreen.create_tec_screen(output_dcy / 'tec_screen.fits')
             cfg.calibration.tec.image.append(tecscreen)
         else:
             LOGGER.info("DRYRUN: Skipping TEC screen creation")
     else:
-        tec_compatible = farm.data.loader.check_tec_image_compatibility(
+        tec_compatible = farm.config.check_tec_image_compatibility(
             cfg, cfg.calibration.tec.image
         )
         if not tec_compatible[0]:
@@ -531,17 +613,52 @@ for scan in observation.scans:
                                                 scan)
     n_scan_str = format(n_scan, f'0{len(str(observation.n_scans)) + 1}')
 
-    # Primary beam creation for scan
-    observation.create_beam_pattern(
-        scan, beam_fits=cfg.root_name.append(f'_ICUT_{n_scan_str}.fits'),
-        resample=16, template=cfg.sky_model.image
+    # Implement gain/bandpass errors for scan
+    # See https://ska-telescope.gitlab.io/sim/oskar/telescope_model/telescope_model.html#telescope-gain-model
+    # for description of how produced gain errors are implemented as part of the
+    # telescope model
+    num_int, num_freq, num_tel = (np.ceil(scan.duration / correlator.t_int),
+                                  correlator.n_chan,
+                                  tscop.n_stations)
+
+    # Distribution parameters.
+    t_beta = cfg.calibration.gains.beta
+    t_mean_amp = cfg.calibration.gains.amp_mean
+    t_mean_phase = cfg.calibration.gains.phase_mean
+    t_std_amp = cfg.calibration.gains.amp_err
+    t_std_phase = cfg.calibration.gains.phase_err
+
+    f_beta = cfg.calibration.bandpass.beta
+    f_mean_amp = cfg.calibration.bandpass.amp_mean
+    f_mean_phase = cfg.calibration.bandpass.phase_mean
+    f_std_amp = cfg.calibration.bandpass.amp_err
+    f_std_phase = cfg.calibration.bandpass.phase_err
+
+    gains = generate_gain_errors(
+        num_int, num_freq, num_tel, rseed_scan,
+        t_beta, t_mean_amp, t_mean_phase, t_std_amp, t_std_phase,
+        f_beta, f_mean_amp, f_mean_phase, f_std_amp, f_std_phase,
     )
 
+    # Write HDF5 file with recognised dataset names.
+    tscop_gains_file = tscop.model / "gain_model.h5"
+    if tscop_gains_file.exists():
+        LOGGER.info(f"{tscop_gains_file.resolve()} exists. Removing")
+        tscop_gains_file.unlink()
+    with h5py.File(tscop_gains_file, "w") as hdf_file:
+        hdf_file.create_dataset("freq (Hz)", data=correlator.frequencies)
+        hdf_file.create_dataset("gain_xpol", data=gains)
+    gains_save_dcy = output_dcy / 'gains'
+    shutil.copy2(tscop_gains_file, gains_save_dcy / f'gain_scan{n_scan_str}.h5')
+
+    # Primary beam creation
+    scan_beam_fits = root_name.append(f'_ICUT_{n_scan_str}.fits')
+    observation.create_beam_pattern(scan, scan_beam_fits, resample=16,
+                                    template=cfg.sky_model.image)
+
     if tecscreen:
-        observation.get_scan_tec_screen_slice(
-            tecscreen, scan,
-            scan_tec_fits=cfg.root_name.append(f'_TEC_{n_scan_str}.fits')
-        )
+        scan_tec_fits = root_name.append(f'_TEC_{n_scan_str}.fits')
+        observation.get_scan_tec_screen_slice(tecscreen, scan, scan_tec_fits)
 
     # For the image based model cube, it is first necessary to regrid in a
     # way that will allow a single (u,v) grid to represent the data within
@@ -550,13 +667,14 @@ for scan in observation.scans:
     # Since the model needs to be in Jy/pixel, it is necessary to reduce
     # the brightness as 1/f**2 to take account of the larger pixel size at
     # higher frequencies.
-    sky_model_pbcor = f"{cfg.sky_model.image.stem}_pbcor_scan{n_scan_str}.fits"
-    sky_model_pbcor = cfg.output_dcy / sky_model_pbcor
-    pb_multiply(in_image=sky_model_mir_im, pb=observation.products[scan]['PB'],
+    sky_model_pbcor = cfg.sky_model.image.stem
+    sky_model_pbcor += f"_pbcor_scan{n_scan_str}.fits"
+    sky_model_pbcor = output_dcy / sky_model_pbcor
+    pb_multiply(in_image=sky_model_mir_im, pb=scan_beam_fits,
                 out_fitsfile=sky_model_pbcor, cellscal='1/F')
     sky_model_pbcor_mirim = sky_model_pbcor.with_suffix('.mirim')
 
-    scan_out_ms: pathlib.Path = cfg.root_name.append(
+    scan_out_ms: pathlib.Path = root_name.append(
         f'_ICUT_{n_scan_str}.ms'
     )
     scan_out_uvfits = scan_out_ms.with_suffix('.uvfits')
@@ -564,18 +682,17 @@ for scan in observation.scans:
 
     # Add SKA1-LOW to measurement set header and export measurement set to
     # uvfits format via casa
-    casa.tasks.vishead(vis=f"{observation[scan]['ms']}", mode="put",
-                       hdkey="telescope", hdvalue="SKA1-LOW")
-    casa.tasks.exportuvfits(vis=f"{observation[scan]['ms']}",
+    casa.tasks.vishead(vis=f"{scan_out_ms}", mode="put", hdkey="telescope",
+                       hdvalue="SKA1-LOW")
+    casa.tasks.exportuvfits(vis=f"{scan_out_ms}",
                             fitsfile=f"{scan_out_uvfits}",
                             datacolumn="data", multisource=False,
                             writestation=False, overwrite=True)
-    observation[scan]['uvfits'] = scan_out_uvfits
-    shutil.rmtree(observation[scan]['ms'])
+    shutil.rmtree(scan_out_ms)
 
     # Convert to miriad visibility data format and add relevant header
     # information
-    temp_scan_out_mirvis = cfg.output_dcy / f'temp_{grc(10)}.mirvis'
+    temp_scan_out_mirvis = output_dcy / f'temp_{grc(10)}.mirvis'
     scan_out_mirvis = scan_out_ms.with_suffix('.mirvis')
     miriad.fits(op='uvin', _in=scan_out_uvfits, options="nofq",
                 out=temp_scan_out_mirvis)
@@ -589,25 +706,6 @@ for scan in observation.scans:
 
     miriad.puthd(_in=f"{scan_out_mirvis}/restfreq", value=1.42040575)
     miriad.puthd(_in=f"{scan_out_mirvis}/telescop", value="SKA1-LOW")
-
-    # Implement gain and bandpass errors
-    # TODO: t_interval hard-coded here
-    miriad.implement_gain_errors(
-        scan_out_mirvis, t_interval=240.,
-        pnoise=cfg.calibration.gains.phase_err,
-        gnoise=cfg.calibration.gains.amp_err,
-        rseed=observation.products[scan]['seed']
-    )
-
-    miriad.implement_bandpass_errors(
-        scan_out_mirvis, nchan=cfg.correlator.n_chan,
-        freq0=cfg.correlator.freq_min,
-        chan_width=cfg.correlator.chan_width,
-        pnoise=cfg.calibration.gains.phase_err,
-        gnoise=cfg.calibration.gains.amp_err,
-        rseed=observation.products[scan]['seed']
-    )
-
     miriad.fits(op='uvout', _in=scan_out_mirvis, out=scan_out_uvfits)
     shutil.rmtree(scan_out_mirvis)
 
@@ -619,7 +717,7 @@ for scan in observation.scans:
 
     observation.products[scan]['MS'] = scan_out_ms
 
-out_ms = cfg.root_name.append('.ms')
+out_ms = root_name.append('.ms')
 observation.concat_scan_measurement_sets(out_ms)
 
 # ######################################################################## #
@@ -633,14 +731,14 @@ wsclean_args = {
     'weight': 'uniform',
     'taper-gaussian': f'{gaussian_taper_arcsec}asec',
     'super-weight': 4,
-    'name': f'{cfg.root_name}_wsclean',
-    'size': f'{cfg.field.nx} {cfg.field.ny}',
-    'scale': f'{cfg.field.cdelt * 3600}asec',
-    'channels-out': cfg.correlator.n_chan,
+    'name': f'{root_name}_wsclean',
+    'size': f'{field.nx} {field.ny}',
+    'scale': f'{field.cdelt * 3600}asec',
+    'channels-out': correlator.n_chan,
     'niter': niter,
     'pol': 'xx'
 }
-farm.software.wsclean(f"{cfg.root_name}.ms", wsclean_args,
+farm.software.wsclean(f"{root_name}.ms", wsclean_args,
                       consolidate_channels=True)
 
 # ######################################################################## #

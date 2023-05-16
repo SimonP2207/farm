@@ -120,6 +120,7 @@ class App(tk.Tk):
         self.button_save.configure(command=self.frame_pline.save)
         self.button_run.configure(command=self.frame_pline.run)
 
+
 if __name__ == '__main__':
     window = App(geometry='600x768')
     window.title('FARM')

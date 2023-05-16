@@ -1,0 +1,197 @@
+inp epitrocoid.mon
+inp dminmod.mon
+print {angd rofa}
+help random
+help ptype
+help angle
+inp dminstatmod.mon
+inp dminmod.mon
+inp dminstatmod.mon
+inp dminmod.mon
+inp dminstatmod.mon
+set dr = 0, 1, (1./255.)
+set drs = dr**0.5
+set drsm = rmax*drs
+print {dr drs drsm}
+ help define
+inp dminstatmod2.mon
+help if
+help logical
+inp dminstatmod2.mon
+print {rant tant xant yant}
+help print
+help echo
+echo "Failure for this radius"
+inp dminstatmod2.mon
+print {rant tant xant yant}
+inp dminstatmod2.mon
+inp dminmod.mon
+inp dminstatmod2.mon
+help ptype
+inp dminstatmod2.mon
+inp dminstatmod3.mon
+print {rant tant xant yant}
+inp dminstatmod3.mon
+print {rant tant xant yant}
+inp dminstatmod3.mon
+print {rant tant xant yant}
+apropos stats
+apropos minmax
+help vecminmax
+help stats
+inp dminstatmod3.mon
+print {drrat}
+help logical
+inp dminstatmod3.mon
+echo $tind
+echo $sind
+inp dminstatmod3.mon
+help logical
+help if
+inp dminstatmod3.mon
+print {drrat}
+inp dminstatmod3.mon
+print {drrat}
+print {drrat rant tant xant yant}
+inp dminstatmod3.mon
+print {drrat rant tant xant yant}
+inp dminstatmod3.mon
+print {drrat rant tant xant yant}
+inp dminstatmod3.mon
+print {drrat rant tant xant yant}
+inp dminstatmod3.mon
+print {drrat rant tant xant yant}
+inp dminstatmod3.mon
+print {drrat rant tant xant yant}
+inp dminstatmod3.mon
+inp dminstatmod4.mon
+help sort
+inp dminstatmod4.mon
+print {ttrial}
+print {tmax}
+print {ttrial xtrial ytrial}
+print {ttrial*10. xtrial ytrial}
+print {(ttrial*10.) xtrial ytrial}
+inp dminstatmod4.mon
+print {drrat}
+inp dminstatmod4.mon
+print {drrat}
+inp dminstatmod4.mon
+print {drrat}
+apropos histogram
+help arithmetic
+help histo
+help hist
+help histogram
+help arithmetic
+set drathiv = 0.5, 1.5, 0.05
+set drrathist = histogram(drrat:drathiv)
+print {drrathist drathiv}
+set drathiv = 0.65, 1.3, 0.01
+set drrathist = histogram(drrat:drathiv)
+print {drrathist drathiv}
+inp dminstatmod4.mon
+print {drrathist drathiv}
+inp dminstatmod4.mon
+      define itrial ($itrial + 1)
+print {drrathist drathiv}
+ set drathiv = $drratmn, $drratmx, 0.02
+set drrathist = histogram(drrat:drathiv)
+print {drrathist drathiv}
+inp dminstatmod4.mon
+help set
+help ticksize
+inp statcomp.mon
+help connect
+help histogram
+inp statcomp.mon
+help histo
+apropos histo
+help hi
+help histogram
+apropos histogram
+help barhist
+inp statcomp.mon
+help shade
+inp statcomp.mon
+help shade
+inp statcomp.mon
+help shade
+shade histogram 45. 500. bins lvogel
+shade 45. 500. bins lvogel
+shade 45. 500 bins lvogel
+shade 45. bins lvogel
+echo $number
+shade 55. bins lvogel
+shade 65. bins lvogel
+shade 65. 100 bins lvogel
+help shde
+help shade
+inp statcomp.mon
+quit
+help read
+help open
+help data
+inp dminstatmodb.mon
+inp dminstatmod5.mon
+inp dminstatmod3.mon
+inp dminstatmod4.mon
+inp dminstatmod5.mon
+inp statcomp.mon
+help print
+inp dminstatmodv360.mon
+help string
+help strings
+define istat (500)
+define istatn (1000+$istat)
+set statlab = substr($istatn,-3)
+set statlab = substr($istatn,-3,0)
+set statlab = substr(string($istatn),-3,0)
+echo $statlab
+print {statlab}
+help substr
+set statlab = substr(string(1000+$istat),1,3)
+print {statlab}
+set dirlab = string(1000+$istat)
+print {dirlab}
+help sprintf
+set dirlab = sprintf('%f',1000+$istat)
+define istat {1500}
+define istat (1500)
+echo $istat
+set dirlab = string($istat)
+print {dirlab}
+help sprint
+help sprintf
+set dirlab = sprintf('%t',$istat)
+set dirlab = sprintf('%i',$istat)
+print {dirlab}
+set statlab = substr(dirlab,1,3)
+print {statlab}
+set labbeg = 'vogel/station'
+set labend = '/layout.txt'
+set outlab = labbeg+statlab+labend
+print {outlab}
+inp dminstatmodv360.mon
+print {outlab}
+print outlab {xant yant}
+print (outlab) {xant yant}
+help print
+print $outlab {xant yant}
+define outlab  (labbeg+statlab+labend)
+echo $outlab
+print $outlab {xant yant}
+echo $outlab
+print vogel/station001/layout.txt {xant yant}
+print "vogel/station001/layout.txt" {xant yant}
+inp dminstatmodv360.mon
+help quote
+help strings
+inp dminstatmodv360.mon
+apropos string
+apropos quote
+help cd
+inp dminstatmodv360.mon
+echo $outlab
+cd vogel
+quit

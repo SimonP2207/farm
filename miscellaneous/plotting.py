@@ -3,7 +3,9 @@ Contains all plotting related functionality, matplotlib being data visualisation
 tool-of-choice
 """
 import pathlib
+import warnings
 from typing import Union, Tuple, Optional, List
+
 import numpy as np
 import numpy.typing as npt
 from astropy.io import fits
@@ -16,7 +18,8 @@ from matplotlib.ticker import MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from ..sky_model._classes import SkyClassType
-from ..config import Telescope
+from ..calibration import BandpassErrors, CalibrationErrors, GainsErrors
+from ..observing import Telescope
 from .image_functions import calculate_spix
 from . import decorators
 
@@ -27,26 +30,87 @@ COLORBAR_WIDTH_FRAC = 0.1  # Colorbar width as percentage of parent axes
 assert 0 < COLORBAR_WIDTH_FRAC < 1, "Invalid fractional colorbar width"
 
 
-def flux(sky_model_type: Union[None, SkyClassType] = None,
-         data_cube: Union[None, npt.ArrayLike] = None,
-         frequencies: Union[None, npt.ArrayLike] = None,
-         extent: Union[None, Tuple[float, float]] = None,
-         precision: int = 3,
-         vmin: Union[None, float] = None,
-         vmax: Union[None, float] = None,
-         ax: Union[None, matplotlib.axes.Axes] = None,
-         cax: Union[None, matplotlib.axes.Axes] = None,
-         savefig: Union[str, bool] = False
-         ) -> Tuple[matplotlib.figure.Figure,
+def plot_ants(telescope: Telescope,
+              ax: Union[None, matplotlib.axes.Axes] = None,
+              savefig: Union[str, bool] = False) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Plot (x, y) antennae/station positions for a telescope
+
+    Parameters
+    ----------
+    telescope
+        Telescope instance for which to plot antennae/station positions
+    ax
+        matplotlib.axes.Axes instance to plot onto. If None (default),
+        matplotlib.figure.Figure and matplotlib.axes.Axes instances are created
+    savefig
+        Full path to save the resulting figure to. If False, figure is not saved
+        (default)
+
+    Returns
+    -------
+    Tuple[plt.Figure, plt.Axes]
+        Figure and Axes instances plotted upon
+    """
+    import copy
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(COLUMN_WIDTH_INCHES,
+                                              COLUMN_WIDTH_INCHES))
+    else:
+        fig = ax.figure
+
+    stations = copy.deepcopy(telescope.stations)
+    ref_ant = stations.pop(telescope.ref_ant)
+    xs, ys, zs = np.transpose(
+        [station.position for station in stations.values()]
+    )
+
+    x_ref, y_ref, z_ref = np.transpose(ref_ant.position)
+
+    ax.plot(xs, ys, mec='b', mfc='cornflowerblue', marker='o', ms=6, ls='None',
+            linewidth=1)
+    ax.plot(x_ref, y_ref, mec='maroon', mfc='red', marker='o', ms=6, ls='None',
+            linewidth=1)
+
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+
+    ax.set_xlim(min([xmin, ymin]), max([xmax, ymax]))
+    ax.set_ylim(*ax.get_xlim())
+
+    ax.set_xlabel(r'$x \, \left[ \mathrm{m} \right]$')
+    ax.set_ylabel(r'$y \, \left[ \mathrm{m} \right]$')
+
+    if savefig:
+        plt.savefig(savefig, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+
+    return fig, ax
+
+
+def plot_flux(sky_model_type: Union[None, SkyClassType] = None,
+              data_cube: Union[None, npt.ArrayLike] = None,
+              frequencies: Union[None, npt.ArrayLike] = None,
+              extent: Union[None, Tuple[float, float]] = None,
+              precision: int = 3,
+              vmin: Union[None, float] = None,
+              vmax: Union[None, float] = None,
+              ax: Union[None, matplotlib.axes.Axes] = None,
+              cax: Union[None, matplotlib.axes.Axes] = None,
+              savefig: Union[str, bool] = False
+              ) -> Tuple[matplotlib.figure.Figure,
                     Tuple[matplotlib.axes.Axes,
                           matplotlib.axes.Axes]]:
     """
-    Plot of the spectral index across a SkyModel of SkyComponent instance
+    Plot of the mean (over the spectral axis) flux of a SubbandSkyModel or
+    SkyComponent instance
 
     Parameters
     ----------
     sky_model_type
-        SkyModel or SkyComponent instance
+        SubbandSkyModel or SkyComponent instance
     data_cube
         3D np.ndarray (FREQ, X, Y) containing intensities/fluxes. If None, it is
          parsed from sky_model_type
@@ -58,7 +122,7 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
         from sky_model_type. If sky_model_type is None, values of (1., 1.) are
         assigned
     precision
-        Number of decimal points of precision on spectral index scale
+        Number of decimal points of precision on flux scale
     vmin
         Minimum flux on colourscale
     vmax
@@ -94,12 +158,16 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
             raise ValueError("If sky_model_type is not specified, data_cube "
                              "and frequencies must not be None")
 
-    # data_cube += 0.0033611419381985564 - np.nanmean(data_cube)
-    flux_ = np.nanmean(data_cube, axis=0)
+    av_freq = np.nanmean(sky_model_type.frequencies)
+    flux_ = np.nanmean(data_cube, axis=0)[::-1]
+    max_flux = np.nanmax(flux_)
 
     fac_precision = 1.0
     for i in range(precision):
         fac_precision /= 10.0
+
+    if max_flux < fac_precision:
+        flux_ /= 1e-3
 
     if vmin is None:
         vmin = np.floor(np.nanmin(flux_) / fac_precision) * fac_precision
@@ -119,9 +187,9 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
         from mpl_toolkits.axes_grid1.axes_size import Fraction, AxesX
 
         divider = make_axes_locatable(ax)
-        cbar_size = Fraction(COLORBAR_WIDTH_FRAC / (1.0 - COLORBAR_WIDTH_FRAC),
-                             AxesX(ax))
-        cax = divider.append_axes("right", size=cbar_size, pad=0.0)
+        cax = divider.append_axes(
+            "top", size=f"{COLORBAR_WIDTH_FRAC * 100:.0f}%", pad=0.0
+        )
 
     cmap = cm.get_cmap('plasma', 12)
 
@@ -134,17 +202,22 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
         im = ax.imshow(flux_, vmin=vmin, vmax=vmax, cmap=cmap,
                        extent=(+nx / 2, -nx / 2, -ny / 2, +ny / 2))
 
-    plt.colorbar(im, cax=cax, ax=ax, orientation='vertical')
-    cax.xaxis.tick_top()
+    cax_orientation = get_cax_orientation(cax)
+    plt.colorbar(im, cax=cax, ax=ax, orientation=cax_orientation)
 
-    ax.set_xticks(range(-4, 5)[::-1])
-    ax.set_yticks(range(-4, 5))
+    if cax_orientation == 'horizontal':
+        cax.xaxis.tick_top()
+    else:
+        cax.yaxis.tick_right()
 
-    ax.yaxis.set_minor_locator(MultipleLocator(0.5))
-    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
+    # ax.set_xticks(range(-4, 5)[::-1])
+    # ax.set_yticks(range(-4, 5))
+    # ax.yaxis.set_minor_locator(MultipleLocator(0.5))
+    # ax.xaxis.set_minor_locator(MultipleLocator(0.5))
 
     ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
-                   right=True, direction='in')
+                   right=True, direction='in', color='w')
+    ax.minorticks_on()
 
     if extent:
         ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
@@ -154,10 +227,21 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
         ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[pixel\right]}$')
 
     # cax.set_yticks(np.arange(vmin, vmax + fac_precision, fac_precision))
+    ax.text(0.95, 0.95, r'$' + f'{av_freq / 1e6:.0f}' + r' \, \mathrm{MHz}$',
+            transform=ax.transAxes, color='w', ha='right', va='top')
 
-    cax.text(0.5, 0.5, r'$S_\nu \, \left[ \mathrm{Jy \, pixel^{-1}} \right]$',
-             transform=cax.transAxes, rotation=90., color='w',
-             horizontalalignment='center', verticalalignment='center')
+    cax.text(0.5, 0.5,
+             r'$\bar{S}_\nu \, \left[ \mathrm{Jy \, pixel^{-1}} \right]$',
+             transform=cax.transAxes, color='w', ha='center', va='center',
+             rotation=90. if cax_orientation == 'vertical' else 0.)
+
+    if cax_orientation == 'vertical':
+        cax.tick_params(which='both', axis='both', bottom=False, top=False,
+                        left=True, right=True, direction='in', color='w')
+    else:
+        cax.tick_params(which='both', axis='both', bottom=True, top=True,
+                        left=False, right=False, direction='in', color='w')
+    cax.minorticks_on()
 
     if savefig:
         fig.savefig(savefig, dpi=300, bbox_inches='tight')
@@ -165,26 +249,26 @@ def flux(sky_model_type: Union[None, SkyClassType] = None,
     return fig, (ax, cax)
 
 
-def spix(sky_model_type: Union[None, SkyClassType] = None,
-         data_cube: Union[None, npt.ArrayLike] = None,
-         frequencies: Union[None, npt.ArrayLike] = None,
-         extent: Union[None, Tuple[float, float]] = None,
-         precision: int = 1,
-         vmin: Union[None, float] = None,
-         vmax: Union[None, float] = None,
-         ax: Union[None, matplotlib.axes.Axes] = None,
-         cax: Union[None, matplotlib.axes.Axes] = None,
-         savefig: Union[str, bool] = False
-         ) -> Tuple[matplotlib.figure.Figure,
-                    Tuple[matplotlib.axes.Axes,
-                          matplotlib.axes.Axes]]:
+def plot_spix(sky_model_type: Union[None, SkyClassType] = None,
+              data_cube: Union[None, npt.ArrayLike] = None,
+              frequencies: Union[None, npt.ArrayLike] = None,
+              extent: Union[None, Tuple[float, float]] = None,
+              precision: int = 1,
+              vmin: Union[None, float] = None,
+              vmax: Union[None, float] = None,
+              ax: Union[None, matplotlib.axes.Axes] = None,
+              cax: Union[None, matplotlib.axes.Axes] = None,
+              savefig: Union[str, bool] = False
+              ) -> Tuple[matplotlib.figure.Figure,
+                         Tuple[matplotlib.axes.Axes,
+                               matplotlib.axes.Axes]]:
     """
-    Plot of the spectral index across a SkyModel of SkyComponent instance
+    Plot of the spectral index across a SubbandSkyModel of SkyComponent instance
 
     Parameters
     ----------
     sky_model_type
-        SkyModel or SkyComponent instance
+        SubbandSkyModel or SkyComponent instance
     data_cube
         3D np.ndarray (FREQ, X, Y) containing intensities/fluxes. If None, it is
          parsed from sky_model_type
@@ -233,9 +317,12 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
             raise ValueError("If sky_model_type is not specified, data_cube "
                              "and frequencies must not be None")
 
-    # data_cube += 0.0033611419381985564 - np.nanmean(data_cube)
-    spix_, _ = calculate_spix(data_cube, frequencies, interpolate_nans=False)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(action='ignore', category=RuntimeWarning)
+        spix_, _ = calculate_spix(data_cube, frequencies,
+                                  interpolate_nans=False)
 
+    spix_ = spix_[::-1]
     fac_precision = 1.0
     for i in range(precision):
         fac_precision /= 10.0
@@ -256,9 +343,9 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
         from mpl_toolkits.axes_grid1.axes_size import Fraction, AxesX
 
         divider = make_axes_locatable(ax)
-        cbar_size = Fraction(COLORBAR_WIDTH_FRAC / (1.0 - COLORBAR_WIDTH_FRAC),
-                             AxesX(ax))
-        cax = divider.append_axes("right", size=cbar_size, pad=0.0)
+        cax = divider.append_axes(
+            "top", size=f"{COLORBAR_WIDTH_FRAC * 100:.0f}%", pad=0.0
+        )
 
     cmap = cm.get_cmap('jet', 12)
 
@@ -271,17 +358,9 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
         im = ax.imshow(spix_, vmin=vmin, vmax=vmax, cmap=cmap,
                        extent=(+nx / 2, -nx / 2, -ny / 2, +ny / 2))
 
-    plt.colorbar(im, cax=cax, ax=ax, orientation='vertical')
-    cax.xaxis.tick_top()
-
-    ax.set_xticks(range(-4, 5)[::-1])
-    ax.set_yticks(range(-4, 5))
-
-    ax.yaxis.set_minor_locator(MultipleLocator(0.5))
-    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
-
-    ax.tick_params(which='both', axis='both', bottom=True, top=True, left=True,
-                   right=True, direction='in')
+    ax.tick_params(which='both', axis='both', bottom=True, top=True,
+                   left=True, right=True, direction='in')
+    ax.minorticks_on()
 
     if extent:
         ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[deg\right]}$')
@@ -290,11 +369,31 @@ def spix(sky_model_type: Union[None, SkyClassType] = None,
         ax.set_xlabel(r'$\Delta \, \mathrm{R.A.\, \left[pixel\right]}$')
         ax.set_ylabel(r'$\Delta \, \mathrm{Dec.\, \left[pixel\right]}$')
 
-    cax.set_yticks(np.arange(vmin, vmax + fac_precision, fac_precision))
+    cax_orientation = get_cax_orientation(cax)
+    plt.colorbar(im, cax=cax, ax=ax, orientation=cax_orientation)
 
-    cax.text(0.5, 0.5, r'$\alpha$', transform=cax.transAxes, color='w',
+    if cax_orientation == 'horizontal':
+        cax.xaxis.tick_top()
+    else:
+        cax.yaxis.tick_right()
+
+    freq_lo = f'{np.min(frequencies) / 1e6:.0f} \\, \\mathrm{{MHz}}'
+    freq_hi = f'{np.max(frequencies) / 1e6:.0f} \\, \\mathrm{{MHz}}'
+
+    ax.text(0.95, 0.95, r'$\alpha^{' + freq_hi + r'}_{' + freq_lo + r'}$',
+            transform=ax.transAxes, color='k', ha='right', va='top')
+
+    cax.text(0.5, 0.5, r'$\alpha$', transform=cax.transAxes, color='k',
              horizontalalignment='center', verticalalignment='center',
-             rotation=90.,)
+             rotation=90. if cax_orientation == 'vertical' else 0.)
+
+    if cax_orientation == 'vertical':
+        cax.tick_params(which='both', axis='both', bottom=False, top=False,
+                        left=True, right=True, direction='in')
+    else:
+        cax.tick_params(which='both', axis='both', bottom=True, top=True,
+                        left=False, right=False, direction='in')
+    cax.minorticks_on()
 
     if savefig:
         fig.savefig(savefig, dpi=300, bbox_inches='tight')
@@ -310,7 +409,7 @@ def power_spectrum(sky_model_type: SkyClassType, freq: float,
     Parameters
     ----------
     sky_model_type
-        SkyModel or SkyComponent instance
+        SubbandSkyModel or SkyComponent instance
     freq
         Frequency at which to plot the power-spectrum
     ax
@@ -355,9 +454,9 @@ def power_spectrum(sky_model_type: SkyClassType, freq: float,
 def target_altaz(t0: Time,
                  tscop_location: EarthLocation,
                  coord_target: SkyCoord,
-                 ax: Union[None, matplotlib.axes.Axes] = None,
-                 cax: Union[None, matplotlib.axes.Axes] = None,
-                 scan_times: Union[None, List[Tuple[Time, Time]]] = None,
+                 ax: Optional[matplotlib.axes.Axes] = None,
+                 cax: Optional[matplotlib.axes.Axes] = None,
+                 scan_times: Optional[List[Tuple[Time, Time]]] = None,
                  savefig: Union[str, bool] = False
                  ) -> Tuple[matplotlib.figure.Figure,
                             Tuple[matplotlib.axes.Axes,
@@ -417,8 +516,10 @@ def target_altaz(t0: Time,
 
     if ax is None:
         plt.close('all')
-        fig, ax = plt.subplots(1, 1, figsize=(COLUMN_WIDTH_INCHES,
-                                              COLUMN_WIDTH_INCHES / 1.1))
+        fig, ax = plt.subplots(1, 1,
+                               figsize=(COLUMN_WIDTH_INCHES,
+                                        COLUMN_WIDTH_INCHES /
+                                        1.1))
     else:
         fig = ax.figure
 
@@ -432,7 +533,7 @@ def target_altaz(t0: Time,
 
     points = ax.scatter(dhours.value, alts_azs.alt, c=alts_azs.az,
                         lw=0, s=8, cmap='twilight_shifted', vmin=0., vmax=360.,
-                        zorder=3)
+                        zorder=2)
     ax.fill_between(dhours.value, 0, 90, sun_alts_azs.alt < -0 * u.deg,
                     color=(0.5, 0.5, 0.5, 0.5), zorder=0)
     ax.fill_between(dhours.value, 0, 90, sun_alts_azs.alt < -18 * u.deg,
@@ -467,13 +568,14 @@ def target_altaz(t0: Time,
             ts = t0_midnight + dts
             frame = AltAz(obstime=ts, location=tscop_location)
             alts_azs = coord_target.transform_to(frame)
-            ax.plot(dts.value, alts_azs.alt, ls=':', color='cyan', zorder=3)
             ax.plot(dts[0].value, alts_azs.alt[0].value,
                     marker='o', mec='g', mfc='lawngreen', ms=5, lw=1,
                     zorder=3)
             ax.plot(dts[-1].value, alts_azs.alt[-1].value,
                     marker='o', mec='maroon', mfc='r', ms=5, lw=1,
                     zorder=3)
+            ax.plot(dts.value, alts_azs.alt, ls='-', color='cyan', zorder=2,
+                    lw=4)
 
     if not savefig:
         plt.show()
@@ -725,3 +827,137 @@ def cylindrical_power_spectrum(image: pathlib.Path, psf: pathlib.Path,
             f'{savedata}_2D_power_spectra_from_images{suffix}.data'
         )
 
+
+def plot_calibration(calibration: CalibrationErrors,
+                     axes: Tuple[plt.Axes, plt.Axes] = None,
+                     savefig: Union[bool, pathlib.Path] = False):
+    from scipy.stats import kde
+
+    nbins = 50
+
+    if axes is None:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(COLUMN_WIDTH_INCHES * 2,
+                                                      COLUMN_WIDTH_INCHES))
+    else:
+        fig = axes[0].figure
+        ax1, ax2 = axes
+
+    ax1.sharex(ax2)
+    ax1.sharey(ax2)
+
+    gains_errs = calibration.gains_errs.errors.flatten()
+    bpass_errs = calibration.bpass_errs.errors.flatten()
+    gains_errs_real, gains_errs_imag = gains_errs.real, gains_errs.imag
+    bpass_errs_real, bpass_errs_imag = bpass_errs.real, bpass_errs.imag
+
+    real_min = min([gains_errs_real.min(), bpass_errs_real.min()])
+    real_max = max([gains_errs_real.max(), bpass_errs_real.max()])
+    imag_min = min([gains_errs_imag.min(), bpass_errs_imag.min()])
+    imag_max = max([gains_errs_imag.max(), bpass_errs_imag.max()])
+
+    xs, ys = np.mgrid[real_min:real_max:nbins * 1j,
+                      imag_min:imag_max:nbins * 1j]
+
+    kg = kde.gaussian_kde(np.vstack((gains_errs_real, gains_errs_imag)))
+    zg = kg(np.vstack([xs.flatten(), ys.flatten()]))
+
+    ax1.set_title('Gains Errors')
+    ax1.pcolormesh(xs, ys, zg.reshape(xs.shape),# shading='gouraud',
+                   cmap=plt.cm.Greens)
+
+    kb = kde.gaussian_kde(np.vstack((bpass_errs_real, bpass_errs_imag)))
+    zb = kb(np.vstack([xs.flatten(), ys.flatten()]))
+
+    ax2.set_title('Bandpass Errors')
+    ax2.pcolormesh(xs, ys, zb.reshape(xs.shape),# shading='gouraud',
+                   cmap=plt.cm.Blues)
+
+    ax2.tick_params(labelleft=False)
+
+    for ax in (ax1, ax2):
+        ax.tick_params(which='both', axis='both', bottom=True, top=True,
+                       left=True, right=True, direction='in')
+        ax.set_xlabel('Real')
+    ax1.set_ylabel('Imaginary')
+
+    plt.subplots_adjust(wspace=0, hspace=0)
+    plt.show()
+
+    return fig, (ax1, ax2)
+
+
+def plot_flux_and_spix(sky_model: SkyClassType):
+    import matplotlib.gridspec as gridspec
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure(figsize=(COLUMN_WIDTH_INCHES * 1.7535483871,
+                              COLUMN_WIDTH_INCHES))
+    gs = gridspec.GridSpec(1, 2, figure=fig)
+    gs.update(wspace=0.0, hspace=0.0) # set the spacing between axes.
+
+    gs1 = gridspec.GridSpecFromSubplotSpec(
+        10, 1, subplot_spec=gs[0], wspace=0., hspace=0.
+    )
+    cax1 = plt.subplot(gs1[0])
+    ax1 = plt.subplot(gs1[1:])
+
+    gs2 = gridspec.GridSpecFromSubplotSpec(
+        10, 1, subplot_spec=gs[1], wspace=0., hspace=0.
+    )
+    ax2 = plt.subplot(gs2[1:])
+    cax2 = plt.subplot(gs2[0])
+
+    # import matplotlib.pyplot as plt
+    # from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+    #
+    # fig, (ax1, ax2) = plt.subplots(
+    #     1, 2, figsize=(2. * COLUMN_WIDTH_INCHES, COLUMN_WIDTH_INCHES),
+    #     layout="constrained"
+    # )
+    #
+    # ax1_divider = make_axes_locatable(ax1)
+    # cax1 = ax1_divider.append_axes("top", size="10%", pad="0%")
+    #
+    # ax2_divider = make_axes_locatable(ax2)
+    # cax2 = ax2_divider.append_axes("top", size="10%", pad="0%")
+    #
+    # ax1.sharey(ax2)
+    # ax1.sharex(ax2)
+    #
+    # plt.subplots_adjust(wspace=0., hspace=0.)
+    #
+    # # Required here in order for plot_flux and plot_spix to get correct colorbar
+    # # orientation
+    # fig.canvas.draw()
+
+    plot_flux(sky_model, ax=ax1, cax=cax1)
+    plot_spix(sky_model, ax=ax2, cax=cax2)
+
+    ax2.set_ylabel('')
+    ax2.yaxis.set_tick_params(labelleft=False)
+
+    plt.show()
+
+    return fig, (ax1, ax2, cax1, cax2)
+
+
+def get_ax_size_inches(ax: plt.Axes) -> Tuple[float, float]:
+    """
+    Get an Axes instance's size in inches. fig.canvas.draw or plt.show should be
+    called beforehand
+    """
+    bbox = ax.get_position()
+    l, b, w, h = bbox.bounds
+    fig_w, fig_h = ax.figure.get_size_inches()
+
+    return fig_w * w, fig_h * h
+
+
+def get_cax_orientation(cax: plt.Axes) -> str:
+    """
+    Get an colorbar's axes' orientation. fig.canvas.draw or plt.show should be
+    called beforehand
+    """
+    cax_width, cax_height = get_ax_size_inches(cax)
+
+    return 'horizontal' if cax_width > cax_height else 'vertical'

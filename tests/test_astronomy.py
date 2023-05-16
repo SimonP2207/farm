@@ -1,13 +1,26 @@
 import unittest
+import warnings
 
 import numpy as np
 import astropy.units as u
 from astropy.time import Time
 from astropy.coordinates import EarthLocation, SkyCoord
 import farm.physics.astronomy as ast
-
+from farm.miscellaneous import decorators
 
 REL_TOL = 1e-5
+
+
+# def filter_erfa_warnings(func):
+#     """Decorator to filter out cryptic ErfaWarnings thrown by erfa library"""
+#     def decorator(*args, **kwargs):
+#         """decorator function"""
+#         from erfa import ErfaWarning
+#
+#         with warnings.catch_warnings():
+#             warnings.simplefilter("ignore")#, ErfaWarning)
+#             return func(*args, **kwargs)
+#     return func
 
 
 class MyTestCase(unittest.TestCase):
@@ -65,6 +78,7 @@ class MyTestCase(unittest.TestCase):
         with self.assertRaises(ValueError) as _:
             ast.flux_to_tb(self.flux, [self.freq], self.omega)
 
+    @decorators.suppress_warnings("astropy", "erfa", "ephem")
     def test_lst_to_utc(self):
         date = Time("2027-01-01 16:18:39.165")
         lon = 123.45
@@ -85,6 +99,7 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(correct_answer.strftime("%Y-%m-%d %H:%M:%S"),
                          answer.strftime("%Y-%m-%d %H:%M:%S"))
 
+    @decorators.suppress_warnings("astropy", "erfa", "ephem")
     def test_scan_times(self):
         loc = EarthLocation.from_geodetic(lon=116.6311 * u.deg,  # ASKAP
                                           lat=-26.697 * u.deg)

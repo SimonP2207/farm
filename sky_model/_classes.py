@@ -7,7 +7,7 @@ import pathlib
 import tempfile
 import math
 from abc import ABC, abstractmethod
-from typing import Tuple, List, Optional, Union, TypeVar, Type
+from typing import Iterable, Tuple, List, Optional, Union, TypeVar, Type
 
 import numpy.typing as npt
 import numpy as np
@@ -56,6 +56,7 @@ def deconvolve_cube(input_fits, output_fits, beam):
 
 
 def hdr2d_from_skymodel(sky_class: Type[SkyClassType]) -> Header:
+    """SubbandSkyModel or SkyComponent 2D (RA and declination) header"""
     from ..miscellaneous.fits import hdr2d
 
     return hdr2d(sky_class.n_x, sky_class.n_y, sky_class.coord0,
@@ -63,6 +64,7 @@ def hdr2d_from_skymodel(sky_class: Type[SkyClassType]) -> Header:
 
 
 def hdr3d_from_skyclass(sky_class: Type[SkyClassType]) -> Header:
+    """SubbandSkyModel or SkyComponent 3D (RA, declination and frequency) header"""
     from ..miscellaneous.fits import hdr3d
 
     if len(sky_class.frequencies) < 1:
@@ -74,6 +76,7 @@ def hdr3d_from_skyclass(sky_class: Type[SkyClassType]) -> Header:
 
 
 def deconvolve_fwhm(conv_size: float, beam_size: float) -> float:
+    """Deconvolved FWHM dimensions given a beam size and convolved FWHM size"""
     return np.sqrt(conv_size ** 2. - beam_size ** 2.)
 
 
@@ -103,6 +106,8 @@ class _BaseSkyClass(ABC):
     coord0: astropy.coordinates.SkyCoord
         Field-of-view's central coordinate
     """
+    from ..observing import Subband
+
     _FREQ_TOL = 1.
     VALID_UNITS = ('K', 'JY/PIXEL', 'JY/SR', 'JY/BEAM')
 
@@ -110,10 +115,11 @@ class _BaseSkyClass(ABC):
     def load_from_oskar_sky_model(cls, osmfile: pathlib.Path,
                                   name: str, cdelt: float,
                                   coord0: SkyCoord, fov: Tuple[float, float],
-                                  freqs: npt.ArrayLike,
+                                  freqs: Union[Subband, npt.ArrayLike],
                                   flux_range: Tuple[float, float] = (0., 1e30),
-                                  beam: Optional[
-                                      dict] = None) -> 'SkyComponent':
+                                  default_spix: float = -0.7,
+                                  beam: Optional[dict] = None
+                                  ) -> 'SkyComponent':
         """
         Create a SkyComponent instance from an Oskar sky model
         (https://ska-telescope.gitlab.io/sim/oskar/sky_model/sky_model.html#sky-model-file)
@@ -144,15 +150,20 @@ class _BaseSkyClass(ABC):
         """
         from ..miscellaneous.file_handling import osm_to_dataframe
 
+        if hasattr(freqs, 'frequencies'):
+            freqs = freqs.frequencies
+
         return cls.load_from_dataframe(osm_to_dataframe(osmfile), name, cdelt,
-                                       coord0, fov, freqs, flux_range, beam)
+                                       coord0, fov, freqs, flux_range,
+                                       default_spix, beam)
 
     @classmethod
     def load_from_dataframe(cls, df: pd.DataFrame,
                             name: str, cdelt: float,
                             coord0: SkyCoord, fov: Tuple[float, float],
-                            freqs: npt.ArrayLike,
+                            freqs: Union[Subband, npt.ArrayLike],
                             flux_range: Tuple[float, float] = (0., 1e30),
+                            default_spix: float = -0.7,
                             beam: Optional[dict] = None) -> 'SkyComponent':
         """
         Create a SkyComponent instance from pandas.DataFrame instance
@@ -174,9 +185,12 @@ class _BaseSkyClass(ABC):
             Frequencies of the SkyComponent [Hz]
         flux_range
             Flux range within to include sources [Jy]
+        default_spix
+            Default spectral index to assign to sources without one listed.
+            Default is -0.7 typical of extragalactic sources
         beam
             Beam with which to deconvolve dimensions as a dict i.e.
-            {'maj': 120, 'min': 120., 'pa': 0.} [deg]
+            {'maj': 0.012, 'min': 0.012., 'pa': 0.} [deg]
 
         Returns
         -------
@@ -186,24 +200,16 @@ class _BaseSkyClass(ABC):
         from ..physics import astronomy as ast
         from ..miscellaneous import image_functions as imfunc
         from ..miscellaneous import generate_random_chars
+        from ..miscellaneous.file_handling import dataframe_to_osm
         from ..miscellaneous.fits import hdr3d
 
-        # Set up fits header, WCS and data array
-        im_hdr = hdr3d(int(fov[0] // cdelt),
-                       int(fov[1] // cdelt),
-                       coord0, cdelt, freqs)
-        im_hdr.insert('CUNIT3', ('BUNIT', 'JY/PIXEL'), after=True)
-        im_wcs = wcs.WCS(im_hdr)
-        im_data = np.zeros((im_hdr['NAXIS3'],
-                            im_hdr['NAXIS2'],
-                            im_hdr['NAXIS1']))
+        if hasattr(freqs, 'frequencies'):
+            freqs = freqs.frequencies
 
-        # Set up pixel grid and coordinate grid
-        zz, yy, xx = np.meshgrid(np.arange(im_hdr['NAXIS3']),
-                                 np.arange(im_hdr['NAXIS2']),
-                                 np.arange(im_hdr['NAXIS1']), indexing='ij')
-        rra, ddec, ffreq = im_wcs.wcs_pix2world(xx, yy, zz, 0)
-
+        # #################################################################### #
+        # ################# Clean and manipulate DataFrame ################### #
+        # #################################################################### #
+        # Remove sources outside field of view or accepted flux range
         flux_range_mask = ((df['fluxI'] >= flux_range[0]) &
                            (df['fluxI'] <= flux_range[1]))
 
@@ -212,12 +218,12 @@ class _BaseSkyClass(ABC):
         )
 
         df = df.drop(df.index[~(fov_mask & flux_range_mask)])
-        df.loc[np.isnan(df.spix), 'spix'] = -0.7
-        area = np.pi * df['min'] * df.maj * 2.3504430539e-11 / (4. * np.log(2.))
-        df['intensityI'] = df.fluxI / area  # Jy / sr
+
+        # Assign default spectral index to those sources lacking one
+        df.loc[np.isnan(df.spix), 'spix'] = default_spix
 
         # Deconvolve given sizes from beam, if given
-        if beam:
+        if beam is not None:
             if not np.isclose(beam['maj'], beam['min'], rtol=1e-2):
                 errh.raise_error(ValueError,
                                  "Circular beams only for deconvolution of "
@@ -227,75 +233,38 @@ class _BaseSkyClass(ABC):
             df['min'] = deconvolve_fwhm(df['min'], beam['min'])
 
             # Default size for sources smaller than the beam
-            point_source_size = cdelt / 3.  # Nyquist sampling
-            df.loc[np.isnan(df['maj']), 'maj'] = point_source_size
-            df.loc[np.isnan(df['min']), 'min'] = point_source_size
-            df.loc[np.isnan(df['pa']), 'pa'] = 0.
-            # df['maj'] = np.where(np.isnan(df['maj']),
-            #                      point_source_size, df['maj'])
-            #
-            # df['min'] = np.where(np.isnan(df['min']),
-            #                      point_source_size, df['min'])
+            for col in ('maj', 'min', 'pa'):
+                df.loc[np.isnan(df[col]), col] = 0.
 
-        # Peak intensity calculation in Jy/pixel. Follows following page, which
-        # defines volume under Gaussian (i.e. integrated flux) as
-        # int_flux = 2 * pi * peak_flux * major * minor
-        # https://en.wikipedia.org/wiki/Gaussian_function#Two-dimensional_Gaussian_function
-        area = np.pi * df['min'] * df.maj * 2.3504430539e-11 / (4. * np.log(2.))
-        df['peak_int'] = df.fluxI / area
+        # #################################################################### #
+        # ################# Create image header and data grid ################ #
+        # #################################################################### #
+        # Set up fits header, WCS and data array
+        im_hdr = hdr3d(int(fov[0] // cdelt),
+                       int(fov[1] // cdelt),
+                       coord0, cdelt, freqs)
+        im_hdr.insert('CUNIT3', ('BUNIT', 'JY/PIXEL'), after=True)
+        im_wcs = wcs.WCS(im_hdr)
+        naxis1, naxis2, naxis3 = im_wcs.pixel_shape
+        im_data = np.zeros((naxis3, naxis2, naxis1))
 
-        df.loc[np.isinf(df.peak_int), 'peak_int'] = df.fluxI[np.isinf(df.peak_int)]
-        df.peak_int[np.isinf(df.peak_int)] = df.fluxI[np.isinf(df.peak_int)]
+        # Set up pixel grid (xx, yy, zz) and coordinate grid (rra, ddec, ffreq)
+        rra, ddec, ffreq = imfunc.make_coordinate_grid(im_wcs)
 
-        # Fix any rows in the dataframe with dimensions == 0
-        row_mask = (df.maj == 0) | (df.min == 0)
-        df.loc[row_mask, 'maj'] = cdelt / 3. * 3600.
-        df.loc[row_mask, 'min'] = cdelt / 3. * 3600.
-
-        # Loop through all sources and add to grid
+        # Individually add each source to grid of fluxes (Jy/pixel) by
         for _, row in df.iterrows():
-            idxs = im_wcs.world_to_array_index_values(
-                row['ra'], row['dec'], freqs[0]
-            )
-
             # Width in indices of sub-array within data to calculate source flux
-            didx = int(row['maj'] * 2 / 3600. // cdelt + 1)
-            didx = np.max([didx, 5])
-
-            # Index ranges in ra and dec within which to calculate source flux
-            ra_idx = (np.max([idxs[2] - didx, 0]),
-                      np.min([idxs[2] + didx, im_hdr['NAXIS1']]))
-
-            dec_idx = (np.max([idxs[1] - didx, 0]),
-                       np.min([idxs[1] + didx, im_hdr['NAXIS2']]))
-
-            rra_ = rra[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
-            ddec_ = ddec[0, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
-
-            # If source if near RA = 0, imfunc.gaussian_2d is given coordinates
-            # in rra_ that it calculates are ~360deg from source position (due
-            # to the wrapped nature of RA, which imfunc.gaussian_2d is unaware
-            # of) leading to zeroes. Therefore unwrap the rra_ coordinates if
-            # required
-            if np.ptp(rra_) > 180:
-                ra0 = row['ra']
-                rra_ = np.where(np.abs(rra_ - ra0) > 180,
-                                rra_ + (360. if ra0 > 180 else -360.),
-                                rra_)
-
-            val0 = imfunc.gaussian_2d(rra_, ddec_,
-                                      row['ra'], row['dec'],
-                                      row['peak_int'],
-                                      row['maj'],
-                                      row['min'],
-                                      row['pa'])
-
-            for freq_idx in range(len(freqs)):
-                vals = val0 * (freqs[freq_idx] /
-                               row['freq0']) ** row['spix']
-                im_data[freq_idx,
-                        dec_idx[0]:dec_idx[1],
-                        ra_idx[0]:ra_idx[1]] += vals
+            if (row['maj'] < cdelt * 3600) and (row['min'] < cdelt * 3600):
+                imfunc.place_point_source_on_grid(
+                    im_data, im_wcs, row.ra, row.dec, row.fluxI, row.freq0,
+                    row.spix
+                )
+            else:
+                imfunc.place_gaussian_on_grid(
+                    im_data, rra, ddec, ffreq, im_wcs,
+                    row.ra, row.dec, row.fluxI, row.freq0,
+                    row.spix, row['maj'], row['min'], row['pa']
+                )
 
         # Generate temporary .fits image to call load_from_fits method on
         hdu = fits.PrimaryHDU(data=im_data, header=im_hdr)
@@ -306,14 +275,18 @@ class _BaseSkyClass(ABC):
         sky_comp = cls.load_from_fits(temp_fits_file, name, cdelt, coord0)
         temp_fits_file.unlink()
 
+        sky_comp.oskar_table = pathlib.Path(f'{name}.osm')
+        dataframe_to_osm(df, sky_comp.oskar_table)
+
         return sky_comp
 
     @classmethod
     def load_from_fits_table(cls, fitsfile: Union[pathlib.Path, fits.HDUList],
                              name: str, cdelt: float,
                              coord0: SkyCoord, fov: Tuple[float, float],
-                             freqs: npt.ArrayLike,
+                             freqs: Union[Subband, npt.ArrayLike],
                              flux_range: Tuple[float, float] = (0., 1e30),
+                             default_spix: float = -0.7,
                              beam: Optional[dict] = None) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits table file or HDUList
@@ -335,6 +308,9 @@ class _BaseSkyClass(ABC):
             Frequencies of the SkyComponent
         flux_range
             Lower and upper bound of source fluxes as a 2-tuple, (lower, upper)
+        default_spix
+            Default spectral index to assign to sources without one listed.
+            Default is -0.7 typical of extragalactic sources
         beam
             Beam with which catalogue sizes are convolved with (dict). If
             specified, the beam will be deconvolved from the source dimensions
@@ -359,6 +335,9 @@ class _BaseSkyClass(ABC):
         """
         from ..miscellaneous.fits import fits_table_to_dataframe
 
+        if hasattr(freqs, 'frequencies'):
+            freqs = freqs.frequencies
+
         if isinstance(fitsfile, pathlib.Path):
             data = fits_table_to_dataframe(fitsfile)
         elif isinstance(fitsfile, fits.HDUList):
@@ -368,18 +347,21 @@ class _BaseSkyClass(ABC):
             errh.raise_error(TypeError, f"{fitsfile} not an HDUList instance "
                                         "or path to a .fits table")
 
-        return cls.load_from_dataframe(data, name, cdelt, coord0, fov, freqs,
-                                       flux_range, beam)
+        sky_comp = cls.load_from_dataframe(
+            data, name, cdelt, coord0, fov, freqs, flux_range, default_spix,
+            beam
+        )
 
+        return sky_comp
 
     @classmethod
     @decorators.docstring_parameter(str(VALID_UNITS)[1:-1])
     def load_from_fits(
-        cls, fitsfile: pathlib.Path,
-        name: Optional[str] = None,
-        cdelt: Optional[float] = None,
-        coord0: Optional[SkyCoord] = None,
-        freqs: Optional[npt.ArrayLike] = None
+            cls, fitsfile: pathlib.Path,
+            name: Optional[str] = None,
+            cdelt: Optional[float] = None,
+            coord0: Optional[SkyCoord] = None,
+            freqs: Optional[Union[npt.NDArray, Subband]] = None
     ) -> 'SkyComponent':
         """
         Creates a SkyComponent instance from a .fits cube
@@ -421,7 +403,11 @@ class _BaseSkyClass(ABC):
         """
         from .. import LOGGER
         from ..physics import astronomy as ast
-        from ..miscellaneous.fits import fits_hdr_and_data, fits_frequencies, fits_equinox, fits_bunit
+        from ..miscellaneous.fits import (fits_hdr_and_data, fits_frequencies,
+                                          fits_equinox, fits_bunit)
+
+        if hasattr(freqs, 'frequencies'):
+            freqs = freqs.frequencies
 
         LOGGER.info(f"Loading {str(fitsfile.resolve())}")
         if not fitsfile.exists():
@@ -480,10 +466,11 @@ class _BaseSkyClass(ABC):
                     # Throw error if desired frequencies lie outside of the
                     # .fits' frequency coverage
                     if fits_data_idx in (0, len(fits_freqs)):
-                        raise ValueError("Desired frequencies go past .fits "
-                                         "frequency coverage. Interpolation of"
-                                         "flux values (not extrapolation) only "
-                                         "supported")
+                        raise ValueError(
+                            "Desired frequencies go past .fits frequency "
+                            "coverage. Only interpolation (not extrapolation) "
+                            "of fluxes is supported"
+                        )
                     else:
                         data[idx] = interpolate_values(
                             freq,
@@ -503,8 +490,8 @@ class _BaseSkyClass(ABC):
         if not name:
             name = fitsfile.name.strip('.fits')[0]
 
-        sky_model = SkyComponent(name, (nx, ny), cdelt=cdelt,
-                                 coord0=coord0, tb_func=tbfs.fits_t_b)
+        sky_model = SkyComponent(name, (nx, ny), cdelt=cdelt, coord0=coord0,
+                                 tb_func=tbfs.fits_t_b)
         sky_model._frequencies = freqs
         sky_model._tb_data = data
 
@@ -533,6 +520,8 @@ class _BaseSkyClass(ABC):
                                  dtype=np.float32)
         # Call __post_init__ equivalent to dataclass' __post_init__
         self.__post_init__()
+
+        self.oskar_table: Optional[pathlib.Path] = None
 
     def __post_init__(self):
         pass
@@ -584,14 +573,15 @@ class _BaseSkyClass(ABC):
     def frequencies(self, new_freq):
         self.add_frequency(new_freq)
 
-    def add_frequency(self, new_freq: Union[float, npt.ArrayLike]):
+    def add_frequency(self, new_freq: Union[float, npt.ArrayLike, Subband]):
         """
         Add an observing frequency (or frequencies)
 
         Parameters
         ----------
         new_freq
-            Observing frequency to add. Can be a float or iterable of floats
+            Observing frequency to add. Can be a float, iterable of floats, or
+            Subband instance from which frequncies will be retrieved
 
         Returns
         -------
@@ -602,6 +592,9 @@ class _BaseSkyClass(ABC):
         TypeError
             If one of frequencies/the frequency being added is not a float
         """
+        if hasattr(new_freq, 'frequencies'):
+            new_freq = new_freq.frequencies
+
         if isinstance(new_freq, (list, tuple, np.ndarray)):
             for freq in new_freq:
                 self.add_frequency(freq)
@@ -624,10 +617,12 @@ class _BaseSkyClass(ABC):
 
     @property
     def header(self):
+        """Sky class' 3D (RA, declination and frequency) header"""
         return hdr3d_from_skyclass(self)
 
     @property
     def header2d(self):
+        """Sky class' 2D (RA and declination) header"""
         return hdr2d_from_skymodel(self)
 
     @abstractmethod
@@ -776,8 +771,8 @@ class _BaseSkyClass(ABC):
                     c = sinpasq / (2. * sx ** 2.) + cospasq / (2. * sy ** 2.)
 
                     return amp * np.exp(-(
-                                a * (x - x0) ** 2 + 2. * b * (x - x0) * (
-                                    y - y0) + c * (y - y0) ** 2.))
+                            a * (x - x0) ** 2 + 2. * b * (x - x0) * (
+                            y - y0) + c * (y - y0) ** 2.))
 
                 xy_max = beam[0] * 2 / 3600.
 
@@ -851,6 +846,11 @@ class _BaseSkyClass(ABC):
 
         miriad.fits(_in=temp_fits_file, out=miriad_image, op='xyin')
         temp_fits_file.unlink()
+
+    @abstractmethod
+    def summary(self) -> str:
+        """Return a handy summary as a str and also print it"""
+        ...
 
     def regrid(self, template: Type[SkyClassType]) -> SkyClassType:
         """
@@ -954,7 +954,7 @@ class _BaseSkyClass(ABC):
     def frequency_present(self, freq: float,
                           abs_tol: float = _FREQ_TOL) -> Union[float, bool]:
         """
-        Check if frequency already present in SkyModel
+        Check if frequency already present in SubbandSkyModel
 
         Parameters
         ----------
@@ -1057,11 +1057,70 @@ class _BaseSkyClass(ABC):
 
 
 class SkyComponent(_BaseSkyClass):
+    """
+    Class holding a single sky component which describes a single abstraction
+    on the sky e.g. point sources, diffuse Galactic emission etc.
+    """
+
     def __init__(self, name: str, npix: Tuple[int, int], cdelt: float,
                  coord0: SkyCoord, tb_func: tbfs.TbFunction):
+        """
+        Parameters
+        ----------
+        name
+            Name to assign to SkyComponent instance
+        npix
+            Number of pixels in x (R.A.) and y (declination) as a 2-tuple
+        cdelt
+            Pixel size [deg]
+        coord0
+            Central coordinate (corresponds to the fits-header CRVAL1 and
+            CRVAL2 keywords) as a astropy.coordnates.SkyCoord instance
+        tb_func
+            Callable to describe brightness temperature distribution on the sky
+            [K]. Must take only 2 arguments being sky_component (SkyComponent
+            instance) and freq (observing frequency, float or array of floats)
+            and return a numpy array of brightness temperatures
+        """
         super().__init__(npix, cdelt, coord0)
         self.name = name
         self._tb_func = tb_func
+
+    @property
+    def format(self) -> str:
+        """
+        Either 'table' or 'image' indicating whether this is a tabular ('table')
+        or image-based ('image') SkyComponent instance
+        """
+        return 'table' if self.oskar_table else 'image'
+
+    def summary(self):
+        """Return a handy summary as a str and also prints it"""
+        smry = (f"{self.__class__.__name__} instance, '{self.name}', in "
+                f"{self.format} format")
+
+        if self.format == 'table':
+            from ..miscellaneous.file_handling import osm_to_dataframe
+
+            df = osm_to_dataframe(self.oskar_table)
+            n_points = np.nansum((df.maj == 0).values |
+                                 (df['min'] == 0).values)
+            n_gaussians = np.nansum((df.maj != 0).values &
+                                    (df['min'] != 0).values)
+
+            smry += (f" consisting of ({n_gaussians} Gaussians and "
+                     f"{n_points} point-like sources ({len(df)} total) "
+                     f"written to {self.oskar_table.resolve()}")
+        else:
+            smry += (f", over {len(self.frequencies)} channels from "
+                     f"{min(self.frequencies) / 1e6:.1f}-"
+                     f"{max(self.frequencies) / 1e6:.1f}MHz on an image grid "
+                     f"of {self.n_x}\u00D7{self.n_y}, {self.cdelt * 3600:.1f} "
+                     f"arcsec pixels")
+
+        print(smry)
+
+        return smry
 
     def normalise(self, other: Type[SkyClassType],
                   inplace: bool = False) -> Optional[SkyClassType]:
@@ -1205,12 +1264,20 @@ class SkyComponent(_BaseSkyClass):
         return new_sky_comp
 
     def t_b(self, freq: tbfs.FreqType) -> tbfs.ReturnType:
+        """Brightness temperature distribution on the sky as an array [K]"""
         return self._tb_func(self, freq)
 
 
-class SkyModel(_BaseSkyClass):
+class SubbandSkyModel(_BaseSkyClass):
+    """
+    Class composed of multiple, individual SkyComponent instances to describe
+    the sky's brightness distribution for a single Subband (i.e. contiguous
+    set of frequencies)
+    """
+    from ..observing import Subband
+
     def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
-                 frequencies: npt.ArrayLike):
+                 subband: Subband):
         """
 
         Parameters
@@ -1222,16 +1289,24 @@ class SkyModel(_BaseSkyClass):
         coord0
             Central coordinate (corresponds to the fits-header CRVAL1 and
             CRVAL2 keywords) as a astropy.coordinates.SkyCoord instance
-        frequencies
-            Frequencies corresponding to the SkyModel instance's desired sky
-            brightness distribution cube's spectral axis
+        subband
+            Subband corresponding to the SubbandSkyModel instance's desired
+            sky brightness distribution cube's spectral axis
         """
         super().__init__(n_pix=n_pix, cdelt=cdelt, coord0=coord0)
-
-        self._frequencies = frequencies
+        self._subband = subband
         self._tb_data = np.zeros((len(self.frequencies), self.n_y, self.n_x))
-
         self._components = []
+
+    @property
+    def frequencies(self) -> npt.NDArray:
+        """Array of frequencies this SubbandSkyModel covers [Hz]"""
+        return self._subband.frequencies
+
+    @property
+    def subband(self) -> Subband:
+        """Subband instance this SubbandSkyModel corresponds to"""
+        return self._subband
 
     def t_b(self, freq: float) -> np.ndarray:
         """
@@ -1249,20 +1324,20 @@ class SkyModel(_BaseSkyClass):
 
     def __add__(self, other: Union[List[SkyComponent],
                                    Tuple[SkyComponent],
-                                   npt.ArrayLike, SkyComponent]) -> 'SkyModel':
+                                   SkyComponent]) -> 'SubbandSkyModel':
         """
         Magic __add__ method used for a convenient interface with the
-        SkyModel.add_component method
+        SubbandSkyModel.add_component method
         """
         self.add_component(other)
         return self
 
     def add_component(self, new_component: Union[List[SkyComponent],
                                                  Tuple[SkyComponent],
-                                                 npt.ArrayLike, SkyComponent]):
+                                                 SkyComponent]):
         """
-        Adds a SkyComponent instance to the SkyModel and adds its contribution
-        to the SkyModel's brightness temperature distribution
+        Adds a SkyComponent instance to the SubbandSkyModel and adds its contribution
+        to the SubbandSkyModel's brightness temperature distribution
 
         Parameters
         ----------
@@ -1281,10 +1356,6 @@ class SkyModel(_BaseSkyClass):
             for component in new_component:
                 self.add_component(component)
 
-        elif not isinstance(new_component, SkyComponent):
-            raise TypeError("Only SkyComponent instances can be added to "
-                            f"SkyModel, not a {type(new_component)} instance")
-
         else:
             if not self.possess_similar_header(new_component):
                 errh.raise_error(ValueError,
@@ -1293,19 +1364,155 @@ class SkyModel(_BaseSkyClass):
             self._components.append(new_component)
 
             # NOTE: Assumption of optically-thin SkyModel and added component
-            self._tb_data += ast.intensity_to_tb(
-                new_component.data(unit='JY/SR'), new_component.frequencies
+            if new_component.format == 'image':
+                self._tb_data += ast.intensity_to_tb(
+                    new_component.data(unit='JY/SR'), new_component.frequencies
+                )
+            else:
+                self._add_osm_to_table(new_component.oskar_table)
+
+    @decorators.convert_str_to_path('osmfile')
+    def _add_osm_to_table(self, osmfile: pathlib.Path):
+        # dataframe_to_osm, osm_to_dataframe
+        from ..miscellaneous import file_handling as fh
+
+        df_to_append = fh.osm_to_dataframe(osmfile)
+
+        if self.oskar_table is None:
+            fname = pathlib.Path(
+                f"{self.__class__.__name__}_Subband{self._subband.name}.osm"
             )
+
+            fname.unlink(missing_ok=True)
+            self.oskar_table = fname
+            new_df = df_to_append
+
+        else:
+            current_df = fh.osm_to_dataframe(self.oskar_table)
+            new_df = current_df.append(df_to_append)
+
+        self.oskar_table.unlink(missing_ok=True)
+        fh.dataframe_to_osm(new_df, self.oskar_table)
 
     def add_frequency(self, *args, **kwargs):
         """
         Raises
         ------
         NotImplementedError
-            Since SkyModel frequencies should only be assigned to a SkyModel
+            Since SubbandSkyModel frequencies should only be assigned to a SubbandSkyModel
             instance upon its creation, this error is raised to avoid user
             issues arising from misuse of the inherited
             _BaseSkyClass.add_frequency method
         """
-        raise NotImplementedError("SkyModel frequencies can only be defined "
-                                  "upon creation of the SkyModel instance")
+        raise NotImplementedError(
+            "SubbandSkyModel frequencies can only be defined upon creation of "
+            "the SubbandSkyModel instance via the 'subband' arg"
+        )
+
+    def summary(self):
+        """Return a handy summary as a str and also prints it"""
+        from collections import Counter
+
+        comp_fmt_counts = Counter([comp.format for comp in self.components])
+        n_tabular = comp_fmt_counts['table']
+        n_image = comp_fmt_counts['image']
+
+        smry = (f"{self.__class__.__name__} instance, comprised of "
+                f"{len(self.components)} components ({n_tabular} tabular fmt, "
+                f"{n_image} image fmt) for the {self.subband.name} subband.")
+
+        if n_tabular > 0:
+            from ..miscellaneous.file_handling import osm_to_dataframe
+
+            df = osm_to_dataframe(self.oskar_table)
+            n_points = np.nansum((df.maj == 0).values |
+                                 (df['min'] == 0).values)
+            n_gaussians = np.nansum((df.maj != 0).values &
+                                    (df['min'] != 0).values)
+
+            smry += (f"\nTabular sources -> {n_gaussians} Gaussians, "
+                     f"{n_points} point-like sources ({len(df)} total) "
+                     f"written to {self.oskar_table.resolve()}")
+
+        smry += (f"\nImage grid -> "
+                 f"{self.n_x}\u00D7{self.n_y}, {self.cdelt * 3600:.1f} "
+                 f"arcsec pixels")
+
+        print(smry)
+
+        return smry
+
+
+class SkyModel:
+    """
+    Class composed of multiple, individual SubbandSkyModel instances to describe
+    the sky's brightness distribution across multiple Subbands
+    """
+    from ..observing import Subband
+
+    def __init__(self, n_pix: Tuple[int, int], cdelt: float, coord0: SkyCoord,
+                 subbands: Optional[Union[Iterable[Subband], Subband]] = None):
+        self.n_x, self.n_y = n_pix
+        self.cdelt = cdelt
+        self.coord0 = coord0
+        self._subbands = []
+        self._subband_skymodels = {}
+
+        if subbands is not None:
+            self.add_subband(subbands)
+
+    @property
+    def subbands(self):
+        return self._subbands
+
+    def add_subband(self, new_subband: Union[Iterable[Subband], Subband]):
+        """
+        Add subband(s) to this SkyModel's list of subbands and as a key to
+        SkyModel's subband_skymodels
+        """
+        import collections.abc
+
+        if isinstance(new_subband, collections.abc.Iterable):
+            for subband in new_subband:
+                self.add_subband(subband)
+
+        else:
+            self._subbands.append(new_subband)
+            self._subband_skymodels[new_subband] = None
+
+    @property
+    def subband_skymodels(self):
+        """Dict of Subband/SubbandSkyModel key/value pairs"""
+        return self._subband_skymodels
+
+    def is_not_matching_field(self, other: SubbandSkyModel
+                              ) -> Union[ValueError, None]:
+        """Check if field (n_x, n_y, cdelt) does NOT match a SubbandSkyModel"""
+        attrs = ('n_x', 'n_y', 'cdelt')
+        field_inconsistencies = [self.n_x != other.n_x,
+                                 self.n_y != other.n_y,
+                                 not np.isclose(self.cdelt, other.cdelt)]
+
+        if any(field_inconsistencies):
+            attr = attrs[field_inconsistencies.index(True)]
+            msg = (f"Inconsistency between SkyModel and SubbandSkyModel {attr}"
+                   f" -> SkyModel.{attr} != SubbandSkyModel.{attr}, "
+                   f"{getattr(self, attr)} != {getattr(other, attr)}")
+
+            return ValueError(msg)
+
+    def add_subband_skymodel(self, subband: Subband, skymodel: SubbandSkyModel):
+        """Add a SubbandSkyModel for a single Subband of the SkyModel"""
+        if not all(np.isclose(subband.frequencies, skymodel.frequencies)):
+            raise ValueError(
+                f"Frequencies of subband, {subband} and added SubbandSkyModel "
+                f"don't match"
+            )
+
+        if self.is_not_matching_field(skymodel):
+            raise self.is_not_matching_field(skymodel)
+
+        if subband not in self._subbands:
+            self.add_subband(subband)
+
+        self._subband_skymodels[subband] = skymodel

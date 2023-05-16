@@ -1,1 +1,2 @@
-from . import tec, noise
+from .noise import BandpassErrors, CalibrationErrors, GainsErrors
+from .tec import TECScreen

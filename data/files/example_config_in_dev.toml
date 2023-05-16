@@ -1,0 +1,116 @@
+[directories]
+  root_name = "example_1"  # root name for all output files (not directory)
+  telescope_model = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/V512/telescope.tm"
+  output_dcy = "/Users/simon.purser/Desktop/test_output_farm"
+
+# observation not yet incorporated in to FARM
+[observation]
+  time = 2027-01-01T10:00:01  # Start time (UTC) YYYY-MM-DDTHH:MM:SS
+  t_total = 1200  # Total on source time [s]
+  n_scan = 3  # Number of observational 'scans' of target field
+  min_gap_scan = 120  # Minimum time-gap between consecutive scans [s]
+  min_elevation = 30.0  # Minimum elevation [deg]
+
+  [observation.field]
+    ra0 = "00:00:00.0"  # [HH:MM:SS.S]
+    dec0 = "-30:00:00.00"  # [DD:MM:SS.SS]
+    frame = "fk5"  # Astropy-compatible frame string e.g. fk4, fk5, galactic etc
+    nx = 1024  # Number of pixels in x/right ascension
+    ny = 1024  # Number of pixels in y/declination
+    cdelt = 0.0078125  # [deg]
+
+  [observation.correlator]
+    freq_min = 115e6  # Hz
+    freq_max = 120e6  # Hz
+    n_chan = 2  # Number of evenly spaced channels across whole bandwidth, int
+    chan_width = 250e3  # channel bandwidth for smearing calculation [Hz]
+    t_int = 60.0  # visibility integration time [s]
+
+# calibration not yet incorporated in to FARM
+[calibration]
+  [calibration.noise]
+    include = true
+    seed = 12345  # Random number seed for thermal noise calculation
+    sefd_frequencies_file = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/noise_frequencies.txt"
+    sefd_file = "/Users/simon.purser/Dropbox (SKAO)/SDC3/Data/TelescopeModels/noise_sefds.txt"
+
+  [calibration.TEC]
+    include = true
+    create = true
+    pixel_size = 100.0  # Phase screen pixel size [m]
+    t_frame = 10.0  # Time between frames for phase screen [s]
+    # One row for each phase screen layer with r0 [m], velocity [m/s],
+    # direction [deg], altitude [m]. r0 is the phase coherence length of the
+    # atmosphere at the observed frequencies.
+    layers = [{r0=1e4, vel=40.0, direction=60.0, altitude=300e3},
+              {r0=1e4, vel=23.5, direction=32.0, altitude=310e3}]
+    alpha_mag = 0.999  # Magnitude of autoregressive parameter where (1-alpha) fraction of phase replaced by Gaussian noise at each time steo
+    image = []
+    residual_error = 0.01
+
+  [calibration.gains]
+    include = true
+    beta = 2.0  # Noise power-spectrum exponent
+    amp_mean = 1.0  # Average amplitude of noise
+    amp_err = 0.1  # Residual amplitude error/standard deviation [%]
+    phase_mean = 0.0  # Average phase of noise [deg]
+    phase_err = 0.1  # Residual phase error/standard deviation [deg]
+
+  [calibration.bandpass]
+    include = true
+    beta = 2.0  # Noise power-spectrum exponent
+    amp_mean = 1.0  # Average amplitude of noise
+    amp_err = 0.1  # Residual amplitude error/standard deviation [%]
+    phase_mean = 0.0  # Average phase of noise [deg]
+    phase_err = 0.1  # Residual phase error/standard deviation [deg]
+
+
+  [calibration.DD-effects]
+    include = false
+
+[sky_models]
+  [sky_models.21cm]
+    include = true
+    create = false
+    image = "/Users/simon.purser/pylib/farm/data/files/obs_lightcone_8_512_single_p.fits"
+
+  [sky_models.A-Team]
+    include = true
+    demix_error = 0.001  # Factor of imperfect demixing of A-team sources
+
+  [sky_models.Galactic]
+    include = true
+    image = ""
+
+    [sky_models.Galactic.LargeScale]
+      include = false
+      create = true
+      image = ""
+
+    [sky_models.Galactic.SmallScale]
+        include = true
+        create = false
+        image = "/Users/simon.purser/pylib/farm/data/files/Gsynch_SKAs.fits"
+
+  [sky_models.EG]  # Extragalactic foregrounds
+    include = true
+    image = ""
+    flux_inner = 10.0  # maximum flux for sources INSIDE the f.o.v. [Jy]
+    flux_outer = 10000.0  # minimum flux for sources OUTSIDE the f.o.v. [Jy]
+    flux_transition = 0.2  # flux below which to transition from known sources to T-RECS sources [Jy]
+
+    [sky_models.EG.Known]
+      include = true
+      image = "/Users/simon.purser/pylib/farm/data/files/GLM_LoBESv2.osm"  # fits image or table
+
+    [sky_models.EG.TRECS]
+      include = true
+      create = false
+      image = "/Users/simon.purser/pylib/farm/data/files/sky_continuum_sdc3_v1_1.fits"  # fits image or table
+
+[wsclean]
+  taper-gaussian = 60  # [arcsec]
+  weight = 'uniform'
+  super-weight = 4
+  niter = 10000
+  pol = 'xx'

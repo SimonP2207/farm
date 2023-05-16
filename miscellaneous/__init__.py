@@ -10,7 +10,8 @@ from . import (decorators, error_handling, fits, image_functions, plotting,
                file_handling)
 
 __all__ = ['decorators', 'error_handling', 'fits', 'image_functions',
-           'plotting', 'file_handling', 'generate_random_chars']
+           'plotting', 'file_handling', 'generate_random_chars',
+           'interpolate_values']
 
 
 def timedelta_to_ddhhmmss(td: timedelta):
@@ -34,7 +35,8 @@ def generate_random_chars(length: int, choices: str = 'alphanumeric') -> str:
         Number of characters to generate
     choices
         Characters to choose from. Can be 'alphanumeric', 'alpha', or 'numeric.
-        Default is 'alphanumeric
+        Default is 'alphanumeric'
+
     Returns
     -------
     string of defined length comprised of random characters from desired

@@ -560,7 +560,7 @@ def eor_user_params(master: Type[tk.Frame]) -> Section:
              "below that. Beyond 48 threads, there are no appreciable speed-ups"
              " because of the scaling limitation"
     )
-       
+
     params.fields['USE_FFTW_WISDOM'] = CheckbuttonField(
         master=params.content_frame, text="Use stored FFTW_WISDOMS?",
         hint="Whether or not to use stored FFTW_WISDOMs for improving "

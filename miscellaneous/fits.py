@@ -28,7 +28,7 @@ def fits_bunit(fitsfile: Path) -> str:
         return None
 
 
-def fits_equinox(fitsfile: Path) -> float:
+def fits_equinox(fitsfile: Path, raise_warnings: bool = False) -> float:
     """Get equinox from .fits header. Assume J2000 if absent"""
 
     header, _ = fits_hdr_and_data(fitsfile)
@@ -37,9 +37,11 @@ def fits_equinox(fitsfile: Path) -> float:
         return header["EQUINOX"]
     except KeyError:
         # Assume J2000 if information not present in header
-        errh.issue_warning(UserWarning,
-                           "Equinox information not present. Assuming J2000")
-        return 2000.0
+        if raise_warnings:
+            errh.issue_warning(
+                UserWarning, "Equinox information not present. Assuming J2000"
+            )
+        return 2000.
 
 
 def fits_hdr_and_data(fitsfile: Path) -> Tuple[Header, npt.NDArray]:
@@ -103,8 +105,8 @@ def hdr2d(n_x: int, n_y: int, coord0: astropy.coordinates.SkyCoord,
     return hdr
 
 
-def hdr3d(n_x: int, n_y: int, coord0, cdelt: float,
-          frequencies: npt.ArrayLike) -> Header:
+def hdr3d(n_x: int, n_y: int, coord0: astropy.coordinates.SkyCoord,
+          cdelt: float, frequencies: npt.ArrayLike) -> Header:
     """
     Create a 3D (RA, declination and frequency) header
 

@@ -16,10 +16,9 @@ import h5py
 import numpy as np
 from astropy.io import fits
 
-import colorednoise as cn
-
 import farm
 from farm import config
+from farm.calibration import generate_gain_errors
 import farm.physics.astronomy as ast
 import farm.miscellaneous as misc
 from farm.miscellaneous import generate_random_chars as grc
@@ -35,11 +34,12 @@ from farm import LOGGER
 
 AnySkyCompCfg = TypeVar('AnySkyCompCfg', bound=config.SkyComponentConfiguration)
 
+
 # TODO: Generic function to process a single SkyComponent from the
 #  configuration. Still in progress.
 def process_component(
         comp_name: str,
-        sky_model: farm.sky_model.SkyModel,
+        sky_model: farm.sky_model.SubbandSkyModel,
         comp_cfg: AnySkyCompCfg,
         field: config.Field,
         correlator: config.Correlator
@@ -52,7 +52,7 @@ def process_component(
     comp_name
         Name to give the SkyComponent instance
     sky_model
-        SkyModel instance with which to regrid to
+        SubbandSkyModel instance with which to regrid to
     comp_cfg
         farm.config.SkyComponentConfiguration or any of its childclasses from
         which to process the SkyComponent
@@ -197,10 +197,10 @@ if not MODEL_ONLY:
 # ########################### SkyModel Creation ############################## #
 # #####################  # # # # # # # # # # # # # # # ####################### #
 # ############################################################################ #
-LOGGER.info(f"Instantiating SkyModel")
-sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
-                                    cfg.field.cdelt, cfg.field.coord0,
-                                    cfg.correlator.frequencies)
+LOGGER.info(f"Instantiating SubbandSkyModel")
+sky_model = farm.sky_model.SubbandSkyModel((cfg.field.nx, cfg.field.ny),
+                                           cfg.field.cdelt, cfg.field.coord0,
+                                           cfg.correlator.frequencies)
 # ############################################################################ #
 # ################## Large-scale Galactic foreground model ################### #
 # ############################################################################ #
@@ -473,12 +473,12 @@ for component in sky_model.components:
             unit='JY/PIXEL'
         )
     else:
-        LOGGER.info("DRYRUN: Skipping .fits creation for SkyModel components")
+        LOGGER.info("DRYRUN: Skipping .fits creation for SubbandSkyModel components")
 
 if not DRY_RUN:
     sky_model.write_fits(cfg.sky_model.image, unit='JY/PIXEL')
 else:
-    LOGGER.info("DRYRUN: Skipping .fits creation for SkyModel")
+    LOGGER.info("DRYRUN: Skipping .fits creation for SubbandSkyModel")
 
 if not MODEL_ONLY:
     # Do not use copy.deepcopy on Sky instances. Throws the error:
@@ -545,49 +545,29 @@ tecscreen = None
 if cfg.calibration.tec and not MODEL_ONLY:
     if cfg.calibration.tec.create:
         if not DRY_RUN:
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            # TODO: PUT INTO TECScreen class, f(output_file, r0, speed, alpha,
-            #  sampling, t_int, layer_params, bmax) -> TECScreen instance
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            # TODO: Hard-coded values here
-            r0 = 1e4
-            speed = 150e3 / 3600
-            alpha_mag = 0.999
-            sampling = 100.0
-            t_int = 10.
-            layer_params = np.array([(r0, speed, 60.0, 300e3),
-                                     (r0, speed / 2.0, -30.0, 310e3)])
+            alpha_mag = cfg['calibration']['TEC']['alpha_mag']
+            sampling = cfg['calibration']['TEC']['pixel_size']
+            t_int = cfg['calibration']['TEC']['t_frame']
+
+            layer_params = np.empty((0, 4))
+            props = ('r0', 'vel', 'direction', 'altitude')
+            for layer in cfg['calibration']['TEC']['layers']:
+                layer_params = np.vstack(
+                    (layer_params, [layer[prop] for prop in props])
+                )
+
             bmax = max(cfg.telescope.baseline_lengths.values())
 
-            screen_width_m = (2 * (np.max(layer_params[:, -1]) *
-                                   np.tan(np.radians(
-                                       (max(cfg.field.fov) / 2.)))
-                                   + bmax))
-
-            # Round screen width to nearest sensible number
-            screen_width_m = ((screen_width_m / sampling // 100 + 1) *
-                              100 * sampling)
-
-            m = int(bmax / sampling)  # Pixels per sub-aperture
-            n = int(screen_width_m / bmax)  # Sub-apertures across screen
-            pscale = screen_width_m / (n * m)  # Pixel scale
-            rate = t_int ** -1.
-
-            arscreen = farm.calibration.tec.ArScreens(
-                n, m, pscale, rate, layer_params, alpha_mag,
-                cfg.calibration.noise.seed
-            )
-
-            tecscreen = farm.calibration.tec.TECScreen(
-                arscreen, cfg.observation.t_start,
-                max([_ for __ in scan_times for _ in __])
+            tecscreen = farm.calibration.tec.TECScreen.create_from_params(
+                t_start=cfg.observation.t_start,
+                t_end=max([_ for __ in scan_times for _ in __]),
+                t_int=t_int, pixel_m=sampling, fov=max(cfg.field.fov),
+                bmax=bmax, layer_params=layer_params, alpha_mag=alpha_mag,
+                rseed=cfg.calibration.noise.seed
             )
 
             tecscreen.create_tec_screen(cfg.output_dcy / 'tec_screen.fits')
             cfg.calibration.tec.image.append(tecscreen)
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         else:
             LOGGER.info("DRYRUN: Skipping TEC screen creation")
     else:
@@ -633,48 +613,25 @@ for scan in observation.scans:
     num_int, num_freq, num_tel = (np.ceil(scan.duration / cfg.correlator.t_int),
                                   cfg.correlator.n_chan,
                                   cfg.telescope.n_stations)
-    gains = np.empty((num_int, num_freq, num_tel), dtype=np.csingle)
 
     # Distribution parameters.
-    t_beta = 2.  # power law exponent of time error PSD
-    t_mean_amp = 1.0
-    t_mean_phase = 0.0  # radians
+    t_beta = cfg.calibration.gains.beta
+    t_mean_amp = cfg.calibration.gains.amp_mean
+    t_mean_phase = cfg.calibration.gains.phase_mean
     t_std_amp = cfg.calibration.gains.amp_err
-    t_std_phase = cfg.calibration.gains.phase_err * np.pi / 180.  # radians
+    t_std_phase = cfg.calibration.gains.phase_err
 
-    f_beta = 2  # power law exponent of freq error PSD
-    f_mean_amp = 1.0
-    f_mean_phase = 0.0  # radians
+    f_beta = cfg.calibration.bandpass.beta
+    f_mean_amp = cfg.calibration.bandpass.amp_mean
+    f_mean_phase = cfg.calibration.bandpass.phase_mean
     f_std_amp = cfg.calibration.bandpass.amp_err
-    f_std_phase = cfg.calibration.bandpass.phase_err * np.pi / 180.  # radians
+    f_std_phase = cfg.calibration.bandpass.phase_err
 
-    for i_tscop in range(0, cfg.telescope.n_stations):
-        t_a0 = cn.powerlaw_psd_gaussian(t_beta, num_int,
-                                        random_state=rseed_scan)
-        t_amp = (t_a0 - np.average(t_a0)) * t_std_amp / np.std(t_a0)
-        t_amp += t_mean_amp
-
-        t_p0 = cn.powerlaw_psd_gaussian(t_beta, num_int,
-                                        random_state=rseed_scan + 1)
-        t_phase = (t_p0 - np.average(t_p0)) * t_std_phase / np.std(t_p0)
-        t_phase += t_mean_phase
-
-        t_gains = t_amp * np.exp(1j * t_phase)
-
-        f_a0 = cn.powerlaw_psd_gaussian(f_beta, num_freq,
-                                        random_state=rseed_scan + 2)
-        f_amp = (f_a0 - np.average(f_a0)) * f_std_amp / np.std(f_a0)
-        f_amp += f_mean_amp
-
-        f_p0 = cn.powerlaw_psd_gaussian(f_beta, num_freq,
-                                        random_state=rseed_scan + 3)
-        f_phase = (f_p0 - np.average(f_p0)) * f_std_phase / np.std(f_p0)
-        f_phase += f_mean_phase
-
-        f_gains = f_amp * np.exp(1j * f_phase)
-
-        tf_gains = np.outer(t_gains, f_gains)
-        gains[:, :, i_tscop] = tf_gains
+    gains = generate_gain_errors(
+        num_int, num_freq, num_tel, rseed_scan,
+        t_beta, t_mean_amp, t_mean_phase, t_std_amp, t_std_phase,
+        f_beta, f_mean_amp, f_mean_phase, f_std_amp, f_std_phase,
+    )
 
     # Write HDF5 file with recognised dataset names.
     tscop_gains_file = cfg.telescope.model / "gain_model.h5"

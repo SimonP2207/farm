@@ -30,20 +30,21 @@ For the python modules detailed above (and their dependencies (e.g. `gsl`), inst
 ### Creation of virtual environment via environment.yaml
 Possibly the easiest way of creating the virtual environment would be to use conda in conjunction with the `environment.yaml` file, which lists FARM's dependencies, including pip-installed git repositories. This can be achieved via:
 
-```commandline
+```bash
 conda env create -f environment.yaml
 ```
 
 Subsequently, you can activate the farm virtual environment via:
 
-```commandline
+```bash
 conda activate farm
 ```
 
 ### Manual creation of virtual environment
+
 **NOTE**: Installation of `py21cmFAST` on MacOSX leads to issues during compilation with the error, `clang: error: unsupported option '-fopenmp'` being thrown when installing via `pip install `. To properly resolve this and install `py21cmFAST` is detailed [here](https://github.com/21cmfast/21cmFAST/issues/84).
 
-```commandline
+```bash
 conda create -n farm python>3.8
 conda activate farm
 
@@ -113,11 +114,11 @@ gdsm = farm.SkyComponent(dims, cell_size, coord,
                          tb_func=farm.tb_functions.gdsm2016_t_b)
 gdsm.add_frequency(gssm.frequencies)
 
-# Create SkyModel instance which will handle the combination of the various 
+# Create SubbandSkyModel instance which will handle the combination of the various 
 # SkyComponent instances. Add frequency information to it
-skymodel = farm.SkyModel(dims, cell_size, coord, gssm.frequencies)
+skymodel = farm.SubbandSkyModel(dims, cell_size, coord, gssm.frequencies)
 
-# Add individual SkyComponent instances to the SkyModel
+# Add individual SkyComponent instances to the SubbandSkyModel
 skymodel += (gssm, gdsm)  # Equivalent to skymodel.add_component((gssm, gdsm))
 
 # Write the sky model to a .fits file
@@ -128,7 +129,7 @@ skymodel.write_fits(Path("test_skymodel_Inu.fits"), unit='JY/SR')
 ### Testing
 For the unit-testing, Python's standard library package, `unittest` is used. 
 Command line use is:
-```commandline
+```bash
 python -m unittest /path/to/farm/tests/test_*.py
 ```
 Otherwise, good IDEs (such as PyCharm) have inbuilt testing which can be set up 

@@ -109,10 +109,10 @@ if not MODEL_ONLY:
 # ########################### SkyModel Creation ############################## #
 # #####################  # # # # # # # # # # # # # # # ####################### #
 # ############################################################################ #
-LOGGER.info(f"Instantiating SkyModel")
-sky_model = farm.sky_model.SkyModel((cfg.field.nx, cfg.field.ny),
-                                    cfg.field.cdelt, cfg.field.coord0,
-                                    cfg.correlator.frequencies)
+LOGGER.info(f"Instantiating SubbandSkyModel")
+sky_model = farm.sky_model.SubbandSkyModel((cfg.field.nx, cfg.field.ny),
+                                           cfg.field.cdelt, cfg.field.coord0,
+                                           cfg.correlator.frequencies)
 # ############################################################################ #
 # ################## Large-scale Galactic foreground model ################### #
 # ############################################################################ #
@@ -385,12 +385,12 @@ for component in sky_model.components:
             unit='JY/PIXEL'
         )
     else:
-        LOGGER.info("DRYRUN: Skipping .fits creation for SkyModel components")
+        LOGGER.info("DRYRUN: Skipping .fits creation for SubbandSkyModel components")
 
 if not DRY_RUN:
     sky_model.write_fits(cfg.sky_model.image, unit='JY/PIXEL')
 else:
-    LOGGER.info("DRYRUN: Skipping .fits creation for SkyModel")
+    LOGGER.info("DRYRUN: Skipping .fits creation for SubbandSkyModel")
 
 if not MODEL_ONLY:
     # Do not use copy.deepcopy on Sky instances. Throws the error:
@@ -480,7 +480,7 @@ if cfg.calibration.tec and not MODEL_ONLY:
             pscale = screen_width_m / (n * m)  # Pixel scale
             rate = t_int ** -1.
 
-            arscreen = farm.calibration.tec.ArScreens(
+            arscreen = farm.calibration.tec._ArScreens(
                 n, m, pscale, rate, layer_params, alpha_mag,
                 cfg.calibration.noise.seed
             )
@@ -524,7 +524,7 @@ observation = Observation(cfg)
 observation.add_scan(scans)
 
 
-def obs_loop(cfg, observation, scan):
+def obs_loop(cfg: 'FarmConfiguration', observation: Observation, scan: Scan):
     sky_model_mir_im = cfg.sky_model.image.with_suffix('.im')
 
     n_scan = observation.n_scan(scan)

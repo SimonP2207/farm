@@ -18,6 +18,24 @@ from astropy.coordinates import EarthLocation
 from farm import LOGGER
 from ..miscellaneous import error_handling as errh
 from ..miscellaneous import decorators
+from ..observing import Field
+
+
+def load_configuration_from_toml(toml_file: Union[Path, str]) -> dict:
+    """Load a .toml configuration file and return it as a dict"""
+    if not isinstance(toml_file, Path):
+        toml_file = Path(toml_file)
+
+    if not toml_file.exists():
+        errh.raise_error(FileNotFoundError,
+                         f"{str(toml_file.resolve())} doesn't exist")
+
+    LOGGER.debug(f"{str(toml_file.resolve())} found")
+    config_dict = toml.load(toml_file)
+    _check_config_validity(config_dict)
+    LOGGER.debug(f"{str(toml_file.resolve())} configuration is valid")
+
+    return config_dict
 
 
 # TODO: Write check_tec_image_compatibility method
@@ -99,13 +117,13 @@ def _check_config_validity(config_dict: dict):
         Param(('observation', 'field', 'ra0'), str),
         Param(('observation', 'field', 'dec0'), str),
         Param(('observation', 'field', 'frame'), str),
-        Param(('observation', 'field', 'nxpix'), int),
-        Param(('observation', 'field', 'nypix'), int),
+        Param(('observation', 'field', 'nx'), int),
+        Param(('observation', 'field', 'ny'), int),
         Param(('observation', 'field', 'cdelt'), float),
         Param(('observation', 'correlator', 'freq_min'), float),
         Param(('observation', 'correlator', 'freq_max'), float),
-        Param(('observation', 'correlator', 'nchan'), int),
-        Param(('observation', 'correlator', 'chanwidth'), float),
+        Param(('observation', 'correlator', 'n_chan'), int),
+        Param(('observation', 'correlator', 'chan_width'), float),
         Param(('calibration', 'noise', 'include'), bool),
         Param(('calibration', 'noise', 'seed'), int),
         Param(('calibration', 'noise', 'sefd_frequencies_file'), str),
@@ -243,31 +261,31 @@ class Observation:
         return tuple(scans)
 
 
-@dataclass
-class Field:
-    """Class for holding observational field information"""
-    _ra0: str
-    _dec0: str
-    _frame: str
-    nx: int
-    ny: int
-    cdelt: float  # [deg]
-
-    @property
-    def coord0(self):
-        """Pointing centre as a SkyCoord instance"""
-        return SkyCoord(self._ra0, self._dec0, frame=self._frame,
-                        unit=(u.hourangle, u.deg))
-
-    @property
-    def fov(self):
-        """Field of view in x and y as a 2-tuple in deg"""
-        return self.nx * self.cdelt, self.ny * self.cdelt
-
-    @property
-    def area(self):
-        """Total area of field of view in deg^2"""
-        return np.prod(self.fov)
+# @dataclass
+# class Field:
+#     """Class for holding observational field information"""
+#     _ra0: str
+#     _dec0: str
+#     _frame: str
+#     nx: int
+#     ny: int
+#     cdelt: float  # [deg]
+#
+#     @property
+#     def coord0(self):
+#         """Pointing centre as a SkyCoord instance"""
+#         return SkyCoord(self._ra0, self._dec0, frame=self._frame,
+#                         unit=(u.hourangle, u.deg))
+#
+#     @property
+#     def fov(self):
+#         """Field of view in x and y as a 2-tuple in deg"""
+#         return self.nx * self.cdelt, self.ny * self.cdelt
+#
+#     @property
+#     def area(self):
+#         """Total area of field of view in deg^2"""
+#         return np.prod(self.fov)
 
 
 @dataclass
@@ -371,18 +389,28 @@ class Noise:
 @dataclass
 class Gains:
     """Class for handling implemented gain error information"""
+    amp_mean: float = field(default=1.0)
     amp_err: float = field(default=0.0)
+    phase_mean: float = field(default=0.0)
     phase_err: float = field(default=0.0)
 
     def __post_init__(self):
+        if self.amp_mean < 0.0:
+            raise ValueError(f"Invalid residual amplitude error mean value "
+                             f"given for gains ({self.amp_mean:.2f}). Should "
+                             f"be > 0.0")
         if self.amp_err < 0.0 or self.amp_err > 100.0:
             raise ValueError(f"Invalid residual amplitude error value given "
                              f"for gains ({self.amp_err:.2f}). Should be "
                              f"0 < err <= 100")
-        if self.phase_err < 0.0:
+        if self.phase_mean < 0.0 or self.phase_mean >= 360.0:
+            raise ValueError(f"Invalid residual phase error mean value "
+                             f"given for gains ({self.phase_mean:.2f}). Should "
+                             f"be 0. <= err <= 360.")
+        if self.phase_err < 0.0 or self.phase_err >= 360.0:
             raise ValueError(f"Invalid residual phase error value given "
                              f"for gains ({self.phase_err:.2f}). "
-                             f"Should be >= 0")
+                             f"Should be 0. <= err <= 360.")
 
 
 @dataclass
@@ -576,7 +604,7 @@ class GalacticConfiguration(SkyComponentConfiguration):
 @dataclass
 class SkyModelConfiguration:
     """
-    Composite class representing full SkyModel inclusion information comprised
+    Composite class representing full SubbandSkyModel inclusion information comprised
     of H-21cm, A-Team, Galactic and Extragalactic component instances
     """
     h21cm: Union[bool, EoR21cmConfiguration]
@@ -585,33 +613,24 @@ class SkyModelConfiguration:
     extragalactic: Union[bool, ExtragalacticConfiguration]
 
 
+class FarmPipeline:
+    """
+    Class to replace FarmConfiguration. Should interact with Observation and
+    SubbandSkyModel class. Functionality should primarily be anything associated with
+    the execution of a full simulation run
+    """
+    pass
+
+
 class FarmConfiguration:
     """
     Class to handle the configuration of running pipelines utilising the farm
     library
     """
-
-    @staticmethod
-    def _load_configuration_from_toml(toml_file: Union[Path, str]) -> dict:
-        """Load a .toml configuration file and return it as a dict"""
-        if not isinstance(toml_file, Path):
-            toml_file = Path(toml_file)
-
-        if not toml_file.exists():
-            errh.raise_error(FileNotFoundError,
-                             f"{str(toml_file.resolve())} doesn't exist")
-
-        LOGGER.debug(f"{str(toml_file.resolve())} found")
-        config_dict = toml.load(toml_file)
-        _check_config_validity(config_dict)
-        LOGGER.debug(f"{str(toml_file.resolve())} configuration is valid")
-
-        return config_dict
-
     @decorators.suppress_warnings("astropy", "erfa")
     def __init__(self, configuration_file: Path):
         self.cfg_file = configuration_file
-        self.cfg = self._load_configuration_from_toml(self.cfg_file)
+        self.cfg = load_configuration_from_toml(self.cfg_file)
 
         # Directories setup
         self.output_dcy = Path(self.cfg["directories"]['output_dcy'])
@@ -667,7 +686,7 @@ class FarmConfiguration:
             noise.create_sefd_rms_file(
                 self.output_dcy / "sefd_rms.txt",
                 len(np.loadtxt(self.telescope.model / 'layout.txt')),
-                self.observation.t_total,
+                cfg_observation["t_total"],
                 self.correlator.chan_width
             )
 
@@ -677,12 +696,16 @@ class FarmConfiguration:
                       err=cfg_calibration["TEC"]["residual_error"])
 
         if cfg_calibration["gains"]["include"]:
-            gains = Gains(amp_err=cfg_calibration["gains"]["amp_err"],
-                          phase_err=cfg_calibration["gains"]["phase_err"], )
+            gains = Gains(amp_mean=cfg_calibration["gains"]["amp_mean"],
+                          amp_err=cfg_calibration["gains"]["amp_err"],
+                          phase_mean=cfg_calibration["gains"]["phase_mean"],
+                          phase_err=cfg_calibration["gains"]["phase_err"])
 
         if cfg_calibration["bandpass"]["include"]:
-            bpass = Gains(amp_err=cfg_calibration["bandpass"]["amp_err"],
-                          phase_err=cfg_calibration["bandpass"]["phase_err"], )
+            bpass = Gains(amp_mean=cfg_calibration["bandpass"]["amp_mean"],
+                          amp_err=cfg_calibration["bandpass"]["amp_err"],
+                          phase_mean=cfg_calibration["bandpass"]["phase_mean"],
+                          phase_err=cfg_calibration["bandpass"]["phase_err"])
 
         if cfg_calibration["DD-effects"]['include']:
             dd_effects = DDEffects()

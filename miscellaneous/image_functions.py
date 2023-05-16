@@ -6,6 +6,7 @@ import pathlib
 from typing import Union, Tuple, Optional
 import numpy as np
 import numpy.typing as npt
+from astropy.wcs import WCS
 
 from .. import LOGGER
 
@@ -154,8 +155,9 @@ def calculate_spix(data_cube: npt.ArrayLike,
                    interpolate_nans: bool = True
                    ) -> Tuple[npt.NDArray, npt.NDArray]:
     """
-    Calculate the spectral index across a SkyModel or Skycomponent instance
-    field of view, using standard least squares regression
+    Calculate the spectral index across a SubbandSkyModel or Skycomponent
+    instance field of view, using standard least squares regression across all
+    provided frequencies
 
     Parameters
     ----------
@@ -345,6 +347,192 @@ def gaussian_2d(x: Union[float, npt.ArrayLike], y: Union[float, npt.ArrayLike],
 
     dx, dy = x - x0, y - y0
     return peak * np.exp(-(a * dx ** 2. + 2. * dx * dy * b + c * dy ** 2.))
+
+
+def place_point_source_on_grid(data: npt.NDArray, im_wcs: WCS, tgt_ra: float,
+                               tgt_dec: float, tgt_flux0: float,
+                               tgt_freq0: float, tgt_spix: float):
+    """
+    Given a coordinate for a point source, add it (in place) to the data array
+    of fluxes
+
+    Parameters
+    ----------
+    data
+        Data array of fluxes
+    im_wcs
+        World coordinate system
+    tgt_ra
+        Source's right ascension [deg]
+    tgt_dec
+        Source's declination [deg]
+    tgt_flux0
+        Source's peak-flux/flux at freq0 [Jy]
+    tgt_freq0
+        Frequency of source's peak flux [Hz]
+    tgt_spix
+        Spectral index of source
+    """
+    im_hdr = im_wcs.to_header(relax=True)
+    nfreq = im_wcs.spectral.array_shape[0]
+    im_freqs = np.array(
+        [im_hdr['CRVAL3'] + (n - im_hdr['CRPIX3'] + 1) * im_hdr['CDELT3']
+         for n in range(nfreq)]
+    )
+
+    # Get size of pixel in both RA and declination
+    d_dec = im_hdr['CDELT2']
+    d_ra = d_dec / np.cos(np.radians(tgt_dec))
+    cell_area = np.abs(d_ra * d_dec)
+
+    verts = np.array(
+        [[[tgt_ra + d_ra / 2., tgt_dec - d_dec / 2.],
+          [tgt_ra - d_ra / 2., tgt_dec - d_dec / 2.],
+          [tgt_ra + d_ra / 2., tgt_dec + d_dec / 2.],
+          [tgt_ra - d_ra / 2., tgt_dec + d_dec / 2.]]] * nfreq
+    )
+    ras = verts[:, :, 0].reshape((nfreq, 2, 2))
+    decs = verts[:, :, 1].reshape((nfreq, 2, 2))
+    freqs = np.concatenate([np.full((1, 2, 2), freq) for freq in im_freqs],
+                           axis=0)
+
+    crds = np.concatenate((ras[..., np.newaxis], decs[..., np.newaxis]), axis=3)
+    idxs_verts = im_wcs.world_to_array_index_values(ras, decs, freqs)
+    cell_crds = im_wcs.array_index_to_world_values(*idxs_verts)[:2]
+
+    # If source is near RA = 0, imfunc.gaussian_2d is given coordinates
+    # in ra_ that it calculates are ~360deg from source position (due
+    # to the wrapped nature of RA, which imfunc.gaussian_2d is unaware
+    # of) leading to zeroes. Therefore unwrap the ra_ coordinates if
+    # required
+    if np.ptp(cell_crds[0]) > 180:
+        cell_crds = (np.where(np.abs(cell_crds[0] - tgt_ra) > 180,
+                     cell_crds[0] + (360. if tgt_ra > 180 else -360.),
+                     cell_crds[0]),
+                     cell_crds[1])
+
+    crd_intersection = np.mean(cell_crds, axis=(1, 2, 3))
+
+    outside_arr = ((idxs_verts[2] >= data.shape[2]) | (idxs_verts[2] < 0) |
+                   (idxs_verts[1] >= data.shape[1]) | (idxs_verts[1] < 0))
+
+    # Do not add source if any part of it lies outside data array
+    if True in outside_arr:
+        return verts, crd_intersection
+
+    offsets = crds - crd_intersection
+    areas = np.abs(np.prod(offsets, axis=(3,))) / cell_area
+
+    vals = (
+        areas[np.newaxis, ...] * tgt_flux0 *
+        (im_freqs[..., np.newaxis, np.newaxis] / tgt_freq0) ** tgt_spix
+    )
+
+    data[idxs_verts] = vals
+
+
+def place_gaussian_on_grid(data: npt.NDArray, ras: npt.NDArray,
+                           decs: npt.NDArray, freqs: npt.NDArray,
+                           im_wcs: WCS, tgt_ra: float,
+                           tgt_dec: float, tgt_flux0: float,
+                           tgt_freq0: float, tgt_spix: float,
+                           tgt_maj_as: float, tgt_min_as: float,
+                           tgt_pa_deg: float):
+    """
+    Given a coordinate and dimensions for a Gaussian source, add it (in place)
+    to the data array of fluxes
+
+    Parameters
+    ----------
+    data
+        Data array of fluxes [Jy/pixel]
+    ras
+        Grid of right ascension coordinates of the same shape as data [deg]. See
+        make_coordinate_grid for an acceptable format
+    decs
+        Grid of declination coordinates of the same shape as data [deg]. See
+        make_coordinate_grid for an acceptable format
+    freqs
+        Grid of frequency coordinates of the same shape as data [Hz]. See
+        make_coordinate_grid for an acceptable format
+    im_wcs
+        World coordinate system
+    tgt_ra
+        Source's right ascension [deg]
+    tgt_dec
+        Source's declination [deg]
+    tgt_flux0
+        Source's peak-flux/flux at freq0 [Jy]
+    tgt_freq0
+        Frequency of source's peak flux [Hz]
+    tgt_spix
+        Spectral index of source
+    tgt_maj_as
+        Source's major axis FWHM [arcsec]
+    tgt_min_as
+        Source's minor axis FWHM [arcsec]
+    tgt_pa_deg
+        Source's major axis' position angle (east from north) [deg]
+    """
+    cdelt1, cdelt2, cdelt3 = im_wcs.wcs.cdelt
+    naxis1, naxis2, naxis3 = im_wcs.pixel_shape
+    crpix1, crpix2, crpix3 = im_wcs.wcs.crpix
+    crval1, crval2, crval3 = im_wcs.wcs.crval
+
+    im_freqs = np.array(
+        [crval3 + (n - crpix3 + 1) * cdelt3 for n in range(naxis3)]
+    )
+
+    didx = np.max([int(tgt_maj_as * 2 / 3600. // cdelt2 + 1), 5])
+    idxs_target = im_wcs.world_to_array_index_values(
+        tgt_ra, tgt_dec, im_freqs[0]
+    )
+    ra_idx = (idxs_target[2] - didx, idxs_target[2] + didx + 1)
+    dec_idx = (idxs_target[1] - didx, idxs_target[1] + didx + 1)
+
+    # Index ranges in ra and dec within which to calculate source
+    # flux
+    ra_idx = (np.max([ra_idx[0], 0]), np.min([ra_idx[1], naxis1]))
+    dec_idx = (np.max([dec_idx[0], 0]), np.min([dec_idx[1], naxis2]))
+
+    ra_ = ras[:, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
+    dec_ = decs[:, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
+    freqs_ = freqs[:, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]]
+
+    # If source is near RA = 0, imfunc.gaussian_2d is given coordinates
+    # in ra_ that it calculates are ~360deg from source position (due
+    # to the wrapped nature of RA, which imfunc.gaussian_2d is unaware
+    # of) leading to zeroes. Therefore unwrap the ra_ coordinates if
+    # required
+    if np.ptp(ra_) > 180:
+        ra_ = np.where(np.abs(ra_ - tgt_ra) > 180,
+                       ra_ + (360. if tgt_ra > 180 else -360.),
+                       ra_)
+
+    # For sources with Gaussian shapes
+    val0 = gaussian_2d(
+        ra_, dec_, tgt_ra, tgt_dec, 1,
+        np.max([tgt_maj_as, np.abs(cdelt2) * 3600]),
+        np.max([tgt_min_as, np.abs(cdelt2) * 3600]), tgt_pa_deg
+    )
+
+    # Normalise
+    val0 *= tgt_flux0 / np.nansum(val0, axis=(1, 2))[..., np.newaxis, np.newaxis]
+
+    vals = val0 * (freqs_/ tgt_freq0) ** tgt_spix
+    data[:, dec_idx[0]:dec_idx[1], ra_idx[0]:ra_idx[1]] += vals
+
+
+def make_coordinate_grid(im_wcs: WCS) -> npt.NDArray:
+    """
+    Create and return (as a 3-tuple) grids of ra, dec and frequency given a
+    world coordinate system
+    """
+    naxis1, naxis2, naxis3 = im_wcs.pixel_shape
+    zz, yy, xx = np.meshgrid(np.arange(naxis3),
+                             np.arange(naxis2),
+                             np.arange(naxis1), indexing='ij')
+    return im_wcs.wcs_pix2world(xx, yy, zz, 0)
 
 
 def deconvolve(image, psf):

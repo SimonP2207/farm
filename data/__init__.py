@@ -20,11 +20,12 @@ def _check_file_exists(f: Path):
         raise FileNotFoundError(f"{f} does not exist")
     return f
 
+
 DATA_DCY = Path(__file__).parent
 DATA_FILE_DCY = Path(__file__).parent / 'files'
 
 FILES = {
-    'EXAMPLE_CONFIG': 'example_config.toml',
+    'EXAMPLE_CONFIG': 'example_config_in_dev.toml',
     'IMAGES': {
         'MHD': 'Gsynch_SKAs.fits',
         'TRECS': 'sky_continuum_sdc3_v1_1.fits',

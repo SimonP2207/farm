@@ -40,7 +40,15 @@ def create_eor_h21cm_fits(params_file: str):
         Full path to .toml configuration file for producing the .fits cube
     """
     from datetime import datetime
-
+    from astropy.cosmology import Planck18
+    # ######################################################################## #
+    # #### Update tools21cm cosmological parameters to Planck2018 values ##### #
+    # ######################################################################## #
+    t2c.set_cosmology(Planck18)
+    p21c.CosmoParams
+    # ######################################################################## #
+    # ################## Load desired parameters from file ################### #
+    # ######################################################################## #
     with open(params_file, 'rt') as f:
         params = toml.load(f)
 

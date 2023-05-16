@@ -139,21 +139,7 @@ def flux_to_tb(flux: Union[float, npt.ArrayLike],
     -------
     Brightness temperature [K]
     """
-    ndims = np.ndim(flux)
-    if np.shape(freq) == np.shape(flux):
-        pass
-    elif not np.isscalar(freq):
-        if ndims == 0 or not 2 <= ndims <= 3:
-            raise ValueError("Must be either 2 or 3 dimensions")
-
-    wls = con.speed_of_light / (freq if np.isscalar(freq) else np.asarray(freq))
-
-    if ndims == 3 and not np.isscalar(wls):
-        wls = wls[:, np.newaxis, np.newaxis]
-
-    return ((wls ** 2. / (2. * con.Boltzmann * solid_angle)) *
-            ((flux if np.isscalar(flux) else np.asarray(flux)) *
-             1e-26))
+    return intensity_to_tb(flux_to_intensity(flux, solid_angle), freq)
 
 
 def flux_to_intensity(flux: Union[float, npt.ArrayLike],
@@ -366,10 +352,10 @@ def within_square_fov(
     -------
     Position angle(s) from (ra0, dec0) to (ra1, dec1) [deg]
     """
-    dra = angular_separation(ra0, dec1, ra1, dec1)
-    ddec = angular_separation(ra1, dec0, ra1, dec1)
+    dra = angular_separation(ra0, dec0, ra1, dec0)
+    ddec = angular_separation(ra0, dec0, ra0, dec1)
 
-    return (dra < fov[0] / 2) & (ddec < fov[1] / 2)
+    return (np.abs(dra) < (fov[0] / 2.)) & (np.abs(ddec) < (fov[1] / 2.))
 
 
 @decorators.suppress_warnings("astropy", "erfa", "ephem")
@@ -631,11 +617,12 @@ def scan_times(t0: Time, coord_target: SkyCoord, telescope_loc: EarthLocation,
     n_partial_scans = 0  # Number of partial scans conducted
     scans = []  # Hold scan times
 
+    t_start.location = telescope_loc
+
     # Run loop
     while len(scans) - n_partial_scans < n_scan:
         el_t_start = elevation_at_utc(coord_target, t_start, telescope_loc)
         lst_start = t_start.sidereal_time('apparent')
-
         if el_t_start < min_el * u.deg:
             if lst_start > lst_rise:
                 t_start += t_down - ((lst_start - lst_set).value *

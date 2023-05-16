@@ -2,10 +2,72 @@
 Any and all decorator definitions should be placed in this module
 """
 import inspect
-from functools import wraps
 import logging
 import warnings
-from typing import Callable, Any, Tuple
+from functools import wraps
+from pathlib import Path
+from typing import Any, Callable, Iterable, Tuple
+
+
+def convert_str_to_path(args_to_convert: Iterable[str]) -> Callable:
+    """
+    Converts argument(s) from str to Path. arg_to_convert can be a str or list
+    of strings, each string being the name of an argument of the decorated
+    function to convert from str to Path. In case the argument value is None, no
+    conversion is performed
+    """
+    if isinstance(args_to_convert, str):
+        args_to_convert = [args_to_convert]
+
+    def decorator(func: Callable) -> Callable:
+        """decorator function"""
+        from functools import wraps
+        from inspect import getfullargspec
+
+        func_argspec = getfullargspec(func)
+        func_args, func_kwonlyargs = func_argspec.args, func_argspec.kwonlyargs
+
+        for arg_to_convert in args_to_convert:
+            if arg_to_convert not in func_args + func_kwonlyargs:
+                raise ValueError(f"{arg_to_convert} not in args or kwargs "
+                                 f"of {func.__name__}")
+
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            """wrapper function"""
+
+            def _str_to_path(x: Any) -> Any:
+                if isinstance(x, str):
+                    return Path(x).resolve()
+                elif isinstance(x, Iterable):
+                    for i, v in enumerate(x):
+                        x[i] = _str_to_path(v)
+                return x
+
+            for arg_to_convert in args_to_convert:
+                if arg_to_convert in kwargs.keys():
+                    val = kwargs[arg_to_convert]
+                    # if isinstance(val, str):
+                    kwargs[arg_to_convert] = _str_to_path(val)
+                    # kwargs[arg_to_convert] = Path(val).resolve()
+
+                elif arg_to_convert in func_args:
+                    idx_arg = func_args.index(arg_to_convert)
+                    try:
+                        val = args[idx_arg]
+                    except IndexError:  # Gets thrown in optional arg case
+                        continue
+                    # if isinstance(val, str):
+                    args = list(args)
+                    args[idx_arg] = _str_to_path(val)
+                    # args[idx_arg] = Path(val).resolve()
+                    args = tuple(args)
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def ensure_is_fits(*files):
@@ -44,6 +106,7 @@ def log_errors_warnings(function):
     """
     from .error_handling import issue_warning, raise_error
 
+    @wraps(function)
     def wrapper(*args, **kwargs):
         """wrapper function"""
         try:
@@ -72,6 +135,8 @@ def suppress_warnings(*modules) -> Callable:
     """
     def decorator(function: Callable) -> Callable:
         """decorator function"""
+
+        @wraps(function)
         def wrapper(*args, **kwargs) -> Any:
             """wrapper function"""
             # In case the module warnings were ignored by prior, calling

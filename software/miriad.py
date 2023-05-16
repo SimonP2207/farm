@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 import pathlib
-from typing import ByteString, Tuple
+from typing import ByteString, List, Tuple
 import numpy as np
 from numpy import typing as npt
 
@@ -33,7 +33,7 @@ if MIR_EXEC is None:
 #     os.system(f"source {MIR_PATH / 'MIRRC.sh'}")
 #     os.system("echo $LD_LIBRARY_PATH")
 
-def mir_commands():
+def mir_commands() -> List[str]:
     """Get a filter list of miriad commands in the miriad bin directory"""
     mir = sfuncs.which('miriad')
     if mir is None:
@@ -68,7 +68,6 @@ def mir_func(f, thefilter):
         # character limit is not exceeded
         original_args = to_args(kw)
         reformat_args = False
-
         # puthd indicates whether the vis/in parameter value takes extra
         # characters on the end of its path e.g. /my/data/image.im/crval1
         puthd = True if str(f) in ('puthd', 'gethd', 'delhd') else False
@@ -137,7 +136,8 @@ def mir_func(f, thefilter):
 
         # Execute miriad task with arguments
         LOGGER.info(' '.join([f] + original_args))
-        proc = subprocess.Popen([f] + args, shell=False, stdout=subprocess.PIPE,
+        proc = subprocess.Popen([f] + args, shell=False,
+                                stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
 
@@ -167,7 +167,7 @@ def mir_func(f, thefilter):
         if warns:
             msg = "'%s': " % f
             msg += "\n".join(warns)
-            LOGGER.warning(msg)
+            LOGGER.debug(msg)
 
         # Rename shortened file/directory names back to originals
         if reformat_args:

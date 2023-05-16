@@ -1,0 +1,4 @@
+# r0    vel     direction   altitude
+# [m]   [m/s]   [deg]       [m]
+  1e4   40.0    60.0        300e3
+  1e4   23.5    32.0        310e3
